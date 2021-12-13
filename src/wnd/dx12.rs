@@ -10,7 +10,9 @@ impl Dx12 {
         Dx12 {}
     }
 
-    pub fn bind_to_window(&mut self, hwnd: &HWND) -> Result<()> {
+    pub fn create_device(&mut self, hwnd: &HWND) -> Result<()> {
+
+        
 
         Ok(())
     }
