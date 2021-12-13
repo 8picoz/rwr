@@ -1,3 +1,6 @@
-fn main() {
-    println!("Hello, world!");
+use rwr::wnd;
+use windows::core::*;
+
+fn main() -> Result<()> {
+    wnd::run()
 }
