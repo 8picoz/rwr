@@ -122,7 +122,7 @@ impl Wnd {
         self.dx.create_device().expect("Failed to create device");
         self.dx.create_factory().expect("Failed to create dxgi factory");
         self.dx.create_command_queue(&self.hwnd).expect("Failed to create command queue");
-        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create swap chain")
+        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create swap chain");
     
         Ok(())
     }
