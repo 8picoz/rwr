@@ -12,7 +12,7 @@ use windows::{
 const TITLE: &str = "rwr";
 const CLASSNAME: &str = "rwr";
 const CLASSNAMEWITHNULL: &[u8] = b"rwr\0";
-const SIZE: (i32, i32) = (640, 480);
+const SIZE: (u32, u32) = (640, 480);
 
 //hwndとかライフタイム的にstructに持ってないとダメ？
 pub fn run() -> Result<()> {
@@ -53,7 +53,7 @@ impl Wnd {
 
         let mut wnd = Self { hwnd, dx };
 
-        wnd.init_d3d();
+        wnd.init_d3d().expect("Failed init d3d");
 
         wnd
     }
@@ -71,7 +71,7 @@ impl Wnd {
             ..Default::default()
         };
         
-        let mut dx = Dx12::new();
+        let mut dx = Dx12::new(SIZE.0, SIZE.1, 2);
     
         let atom = unsafe { RegisterClassExA(&wc) };
         debug_assert_ne!(atom, 0);
@@ -79,8 +79,8 @@ impl Wnd {
         let mut window_rect = RECT {
             left: 0,
             top: 0,
-            right: SIZE.0,
-            bottom: SIZE.1,
+            right: SIZE.0 as _,
+            bottom: SIZE.1 as _,
         };
         unsafe { AdjustWindowRect(&mut window_rect, WS_OVERLAPPEDWINDOW, false) };
     
@@ -118,6 +118,11 @@ impl Wnd {
                 }
             }
         }
+
+        self.dx.create_device().expect("Failed to create device");
+        self.dx.create_factory().expect("Failed to create dxgi factory");
+        self.dx.create_command_queue(&self.hwnd).expect("Failed to create command queue");
+        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create swap chain")
     
         Ok(())
     }
