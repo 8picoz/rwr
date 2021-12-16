@@ -2,5 +2,5 @@ use rwr::wnd;
 use windows::core::*;
 
 fn main() -> Result<()> {
-    wnd::run()
+    wnd::run_with_raytracing()
 }

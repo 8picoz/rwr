@@ -15,9 +15,10 @@ const CLASSNAMEWITHNULL: &[u8] = b"rwr\0";
 const SIZE: (u32, u32) = (640, 480);
 
 //hwndとかライフタイム的にstructに持ってないとダメ？
-pub fn run() -> Result<()> {
+pub fn run_with_raytracing() -> Result<()> {
 
-    let mut wnd = Wnd::new();
+    let wnd = Wnd::new();
+    wnd.check_raytrace_support().unwrap_or_else(|e| panic!("{}", e));
 
     message_main_loop();
 
@@ -54,6 +55,10 @@ impl Wnd {
         let mut wnd = Self { hwnd, dx };
 
         wnd.init_d3d().expect("Failed init d3d");
+
+        if cfg!(debug_assertions) {
+            println!("create wnd");
+        }
 
         wnd
     }
@@ -126,8 +131,17 @@ impl Wnd {
     
         Ok(())
     }
-    
 
+    pub fn check_raytrace_support(&self) -> std::result::Result<(), &'static str> {
+
+        let ops = self.dx.chack_dxr_support().expect("Failed to check dxr support");
+        if ops.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED {
+            Err("Not supported raytracing")
+        } else {
+            Ok(())
+        }
+    }
+    
     //Win32Api
     fn sample_wndproc(sample: &mut Dx12, message: u32, _: WPARAM) -> bool {
         match message {

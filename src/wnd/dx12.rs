@@ -12,11 +12,12 @@ pub struct Dx12 {
     command_queue: Option<ID3D12CommandQueue>,
     dxgi_factory: Option<IDXGIFactory4>,
     swap_chain: Option<IDXGISwapChain3>,
+    command_allocator: Option<Vec<ID3D12CommandAllocator>>,
 }
 
 impl Dx12 {
     pub fn new(width: u32, height: u32, frame_count: u32) -> Self {
-        Dx12 { width, height, frame_count, command_queue: None, device: None, dxgi_factory: None, swap_chain: None }
+        Dx12 { width, height, frame_count, command_queue: None, device: None, dxgi_factory: None, swap_chain: None, command_allocator: None }
     }
 
     //create系はcreate_swapchainがhwndを必要とするので統一性を持たせるためにnew()で呼ばないようにしている
@@ -86,6 +87,38 @@ impl Dx12 {
         }.cast()?);
 
         Ok(())
+    }
+    
+    pub fn create_command_list(&mut self) -> Result<()> {
+
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+
+        let mut alc: Vec<ID3D12CommandAllocator> = vec![];
+        for i in 0..self.frame_count {
+            alc.push(
+                unsafe {
+                    device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
+                }?
+            );
+        }
+
+        self.command_allocator = Some(alc);
+
+        Ok(())
+    }
+
+    pub fn chack_dxr_support(&self) -> Result<D3D12_FEATURE_DATA_D3D12_OPTIONS5> {
+
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+        
+        let mut ops = D3D12_FEATURE_DATA_D3D12_OPTIONS5 {
+            ..Default::default()
+        };
+        unsafe {
+            device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &mut ops as *mut _ as _, std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32)
+        }?;
+
+        Ok(ops)
     }
 
     pub fn update(&mut self) {
