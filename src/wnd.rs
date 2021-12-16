@@ -9,6 +9,8 @@ use windows::{
     Win32::System::WindowsProgramming::*, Win32::UI::WindowsAndMessaging::*,
 };
 
+use crate::vertex::Vertex;
+
 const TITLE: &str = "rwr";
 const CLASSNAME: &str = "rwr";
 const CLASSNAMEWITHNULL: &[u8] = b"rwr\0";
@@ -17,8 +19,11 @@ const SIZE: (u32, u32) = (640, 480);
 //hwndとかライフタイム的にstructに持ってないとダメ？
 pub fn run_with_raytracing() -> Result<()> {
 
-    let wnd = Wnd::new();
-    wnd.check_raytrace_support().unwrap_or_else(|e| panic!("{}", e));
+    let mut wnd = Wnd::new();
+
+    //DXR
+    wnd.check_raytracing_support().unwrap_or_else(|e| panic!("{}", e));
+    wnd.init_dxr().unwrap_or_else(|e| panic!("{}", e));
 
     message_main_loop();
 
@@ -126,13 +131,13 @@ impl Wnd {
 
         self.dx.create_device().expect("Failed to create device");
         self.dx.create_factory().expect("Failed to create dxgi factory");
-        self.dx.create_command_queue(&self.hwnd).expect("Failed to create command queue");
+        self.dx.create_command_queue().expect("Failed to create command queue");
         self.dx.create_swap_chain(&self.hwnd).expect("Failed to create swap chain");
     
         Ok(())
     }
 
-    pub fn check_raytrace_support(&self) -> std::result::Result<(), &'static str> {
+    pub fn check_raytracing_support(&self) -> std::result::Result<(), &'static str> {
 
         let ops = self.dx.chack_dxr_support().expect("Failed to check dxr support");
         if ops.RaytracingTier == D3D12_RAYTRACING_TIER_NOT_SUPPORTED {
@@ -140,6 +145,20 @@ impl Wnd {
         } else {
             Ok(())
         }
+    }
+
+    pub fn init_dxr(&mut self) -> Result<()> {
+
+        let tri = [
+            Vertex::new(-0.5, -0.5, 0.0, 0.5, 0.5, 0.5, 1.0),
+            Vertex::new(0.5, -0.5, 0.0, 0.5, 0.5, 0.5, 1.0),
+            Vertex::new(0.0, 0.75, 0.0, 0.5, 0.5, 0.5, 1.0),
+        ];
+
+        self.dx.create_vertex_buffer(tri)?;
+
+
+        Ok(())
     }
     
     //Win32Api

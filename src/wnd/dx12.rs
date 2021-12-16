@@ -4,6 +4,8 @@ use windows::{
     Win32::System::LibraryLoader::*, Win32::System::Threading::*,
     Win32::System::WindowsProgramming::*, Win32::UI::WindowsAndMessaging::*,
 };
+
+use crate::vertex::Vertex;
 pub struct Dx12 {
     width: u32,
     height: u32,
@@ -13,11 +15,25 @@ pub struct Dx12 {
     dxgi_factory: Option<IDXGIFactory4>,
     swap_chain: Option<IDXGISwapChain3>,
     command_allocator: Option<Vec<ID3D12CommandAllocator>>,
+
+    vb: Option<ID3D12Resource>,
+    vbv: Option<D3D12_VERTEX_BUFFER_VIEW>,
 }
 
 impl Dx12 {
     pub fn new(width: u32, height: u32, frame_count: u32) -> Self {
-        Dx12 { width, height, frame_count, command_queue: None, device: None, dxgi_factory: None, swap_chain: None, command_allocator: None }
+        Dx12 { 
+            width, 
+            height, 
+            frame_count, 
+            command_queue: None, 
+            device: None,
+            dxgi_factory: None, 
+            swap_chain: None, 
+            command_allocator: None, 
+            vb: None, 
+            vbv: None
+        }
     }
 
     //create系はcreate_swapchainがhwndを必要とするので統一性を持たせるためにnew()で呼ばないようにしている
@@ -45,7 +61,7 @@ impl Dx12 {
         Ok(())
     }
 
-    pub fn create_command_queue(&mut self, hwnd: &HWND) -> Result<()> {
+    pub fn create_command_queue(&mut self) -> Result<()> {
 
         let device = self.device.as_ref().expect("You haven't done initializing a device");
 
@@ -94,7 +110,7 @@ impl Dx12 {
         let device = self.device.as_ref().expect("You haven't done initializing a device");
 
         let mut alc: Vec<ID3D12CommandAllocator> = vec![];
-        for i in 0..self.frame_count {
+        for _ in 0..self.frame_count {
             alc.push(
                 unsafe {
                     device.CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT)
@@ -115,10 +131,78 @@ impl Dx12 {
             ..Default::default()
         };
         unsafe {
-            device.CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &mut ops as *mut _ as _, std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32)
+            device.CheckFeatureSupport(
+                D3D12_FEATURE_D3D12_OPTIONS5, 
+                &mut ops as *mut _ as _, 
+                std::mem::size_of::<D3D12_FEATURE_DATA_D3D12_OPTIONS5>() as u32
+            )
         }?;
 
         Ok(ops)
+    }
+
+    pub fn create_vertex_buffer<const SIZE: usize>(&mut self, vertices: [Vertex; SIZE]) -> Result<()> {
+
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+
+        let heap_prop = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+
+        let resource_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: std::mem::size_of_val(&vertices) as u64,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        unsafe {
+            device.CreateCommittedResource(
+                &heap_prop, 
+                D3D12_HEAP_FLAG_NONE, 
+                &resource_desc, 
+                D3D12_RESOURCE_STATE_GENERIC_READ, 
+                std::ptr::null(), 
+                &mut self.vb,
+            )?;
+        };
+
+        let vertex_buffer = self.vb.as_ref().expect("Failed to create committed resource of vertex buffer");
+
+        unsafe {
+            let mut data = std::ptr::null_mut();
+            
+            vertex_buffer.Map(0, std::ptr::null(), &mut data)?;
+            std::ptr::copy_nonoverlapping(
+                vertices.as_ptr(), 
+                data as *mut Vertex, 
+            std::mem::size_of_val(&vertices)
+            );
+            vertex_buffer.Unmap(0, std::ptr::null());
+        };
+
+        self.vbv = Some(
+            D3D12_VERTEX_BUFFER_VIEW {
+                BufferLocation: unsafe { vertex_buffer.GetGPUVirtualAddress() },
+                StrideInBytes: std::mem::size_of::<Vertex>() as u32,
+                SizeInBytes: std::mem::size_of_val(&vertices) as u32,
+            }
+        );
+
+        Ok(())
     }
 
     pub fn update(&mut self) {
