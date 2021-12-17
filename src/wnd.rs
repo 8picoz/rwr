@@ -156,7 +156,7 @@ impl Wnd {
         ];
 
         self.dx.create_vertex_buffer(tri)?;
-
+        self.dx.build_acceleration_structure().expect("Failed to build acceleration structure");
 
         Ok(())
     }

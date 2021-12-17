@@ -18,6 +18,7 @@ pub struct Dx12 {
 
     vb: Option<ID3D12Resource>,
     vbv: Option<D3D12_VERTEX_BUFFER_VIEW>,
+    vertices_count: u32,
 }
 
 impl Dx12 {
@@ -32,7 +33,8 @@ impl Dx12 {
             swap_chain: None, 
             command_allocator: None, 
             vb: None, 
-            vbv: None
+            vbv: None,
+            vertices_count: 0,
         }
     }
 
@@ -201,6 +203,132 @@ impl Dx12 {
                 SizeInBytes: std::mem::size_of_val(&vertices) as u32,
             }
         );
+
+        self.vertices_count = SIZE as u32;
+
+        Ok(())
+    }
+
+    pub fn build_acceleration_structure(&mut self) -> Result<()> {
+
+        let vertex_buffer = self.vb.as_ref().expect("You haven't done initializing a vertex buffer");
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+
+        //まずBLASに必要なメモリ量を求める
+        let mut geom_desc = unsafe { D3D12_RAYTRACING_GEOMETRY_DESC {
+            Type: D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES,
+            Flags: D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE,
+            Anonymous: D3D12_RAYTRACING_GEOMETRY_DESC_0 {
+                //今回は三角形なのでこの構造体を指定
+                Triangles: D3D12_RAYTRACING_GEOMETRY_TRIANGLES_DESC {
+                    VertexBuffer: D3D12_GPU_VIRTUAL_ADDRESS_AND_STRIDE {
+                        StartAddress: vertex_buffer.GetGPUVirtualAddress(),
+                        StrideInBytes: std::mem::size_of::<Vertex>() as u64,
+                    },
+                    VertexFormat: DXGI_FORMAT_R32G32B32_FLOAT,
+                    VertexCount: self.vertices_count,
+                    ..Default::default()
+                },
+            },
+        }};
+
+        let build_as_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+            //このINPUTSはTLASとBLASのどちらにも使われる
+            Inputs: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
+                Type: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
+                DescsLayout: D3D12_ELEMENTS_LAYOUT_ARRAY,
+                Flags: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE,
+                NumDescs: 1,
+                Anonymous: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS_0 {
+                    pGeometryDescs: &mut geom_desc as *mut _ as _
+                }
+            },
+            ..Default::default()
+        };
+
+        let inputs = build_as_desc.Inputs;
+
+        let mut blas_pre_build = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO {
+            ..Default::default()
+        };
+
+        let device5: ID3D12Device5 = device.cast()?;
+
+        unsafe { 
+            //必要なメモリ量を求める
+            device5.GetRaytracingAccelerationStructurePrebuildInfo(
+                &inputs, 
+                &mut blas_pre_build as *mut _ as _
+            ) 
+        };
+
+        //必要なメモリ量を求めたのでBLASのバッファとスクラッチバッファ(UAVアクセス)のバッファ確保
+
+        //スクラッチリソース
+
+        let prop = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+
+        let scratch_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: blas_pre_build.ResultDataMaxSizeInBytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        };
+
+        let mut blas_scratch: Option<ID3D12Resource> = None;
+        unsafe {
+            device.CreateCommittedResource(
+                &prop, 
+                D3D12_HEAP_FLAG_NONE, 
+                &scratch_desc, 
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
+                std::ptr::null(), 
+                &mut blas_scratch as *mut _ as _,
+            )?
+        };
+
+        let blas_buffer_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: blas_pre_build.ResultDataMaxSizeInBytes,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+        };
+
+        let mut blas: Option<ID3D12Resource> = None;
+        unsafe {
+            device.CreateCommittedResource(
+                &prop, 
+                D3D12_HEAP_FLAG_NONE, 
+                &blas_buffer_desc, 
+                D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
+                std::ptr::null(), 
+                &mut blas as *mut _ as _,
+            )?
+        };
 
         Ok(())
     }
