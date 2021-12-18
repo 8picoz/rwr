@@ -15,14 +15,24 @@ pub struct Dx12 {
     dxgi_factory: Option<IDXGIFactory4>,
     swap_chain: Option<IDXGISwapChain3>,
     command_allocator: Option<Vec<ID3D12CommandAllocator>>,
+    command_list: Option<Vec<ID3D12GraphicsCommandList>>,
+    frame_index: u32,
 
     vb: Option<ID3D12Resource>,
     vbv: Option<D3D12_VERTEX_BUFFER_VIEW>,
     vertices_count: u32,
+    blas_scratch: Option<ID3D12Resource>,
+    blas: Option<ID3D12Resource>,
+
+    //Fence
+    fence: Option<ID3D12Fence>,
+    fence_value: u64,
+    fence_event: HANDLE,
 }
 
 impl Dx12 {
     pub fn new(width: u32, height: u32, frame_count: u32) -> Self {
+
         Dx12 { 
             width, 
             height, 
@@ -32,9 +42,16 @@ impl Dx12 {
             dxgi_factory: None, 
             swap_chain: None, 
             command_allocator: None, 
+            command_list: None,
+            frame_index: 0,
             vb: None, 
             vbv: None,
             vertices_count: 0,
+            blas_scratch: None,
+            blas: None,
+            fence: None,
+            fence_value: 1,
+            fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
         }
     }
 
@@ -107,7 +124,7 @@ impl Dx12 {
         Ok(())
     }
     
-    pub fn create_command_list(&mut self) -> Result<()> {
+    pub fn create_command_allocator(&mut self) -> Result<()> {
 
         let device = self.device.as_ref().expect("You haven't done initializing a device");
 
@@ -121,6 +138,39 @@ impl Dx12 {
         }
 
         self.command_allocator = Some(alc);
+
+        Ok(())
+    }
+
+    pub fn create_command_list(&mut self) -> Result<()> {
+
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+        let command_allocators = self.command_allocator.as_ref().expect("You haven't done initializing a command allocator");
+
+        let mut cmd_lists: Vec<ID3D12GraphicsCommandList> = vec![];
+        for alc in command_allocators {
+            cmd_lists.push(
+                unsafe {
+                    device.CreateCommandList(
+                        0, 
+                        D3D12_COMMAND_LIST_TYPE_DIRECT, 
+                        alc, 
+                        None,
+                    )?
+                }
+            );
+        }
+
+        self.command_list = Some(cmd_lists);
+
+        Ok(())
+    }
+
+    pub fn create_fence(&mut self) -> Result<()> {
+
+        let device = self.device.as_ref().expect("You haven't done initializing a device");
+
+        self.fence = unsafe { Some(device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?) };
 
         Ok(())
     }
@@ -211,8 +261,10 @@ impl Dx12 {
 
     pub fn build_acceleration_structure(&mut self) -> Result<()> {
 
-        let vertex_buffer = self.vb.as_ref().expect("You haven't done initializing a vertex buffer");
         let device = self.device.as_ref().expect("You haven't done initializing a device");
+        let vertex_buffer = self.vb.as_ref().expect("You haven't done initializing a vertex buffer");
+        let command_list = &self.command_list.as_ref().expect("You haven't done initializing a command list")[self.frame_index as usize];
+        let queue = self.command_queue.as_ref().expect("You haven't done initializing a command queue");
 
         //まずBLASに必要なメモリ量を求める
         let mut geom_desc = unsafe { D3D12_RAYTRACING_GEOMETRY_DESC {
@@ -232,7 +284,7 @@ impl Dx12 {
             },
         }};
 
-        let build_as_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
+        let mut build_as_desc = D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC {
             //このINPUTSはTLASとBLASのどちらにも使われる
             Inputs: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS {
                 Type: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL,
@@ -290,7 +342,6 @@ impl Dx12 {
             Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         };
 
-        let mut blas_scratch: Option<ID3D12Resource> = None;
         unsafe {
             device.CreateCommittedResource(
                 &prop, 
@@ -298,7 +349,7 @@ impl Dx12 {
                 &scratch_desc, 
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
                 std::ptr::null(), 
-                &mut blas_scratch as *mut _ as _,
+                &mut self.blas_scratch as *mut _ as _,
             )?
         };
 
@@ -318,7 +369,6 @@ impl Dx12 {
             Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
         };
 
-        let mut blas: Option<ID3D12Resource> = None;
         unsafe {
             device.CreateCommittedResource(
                 &prop, 
@@ -326,11 +376,82 @@ impl Dx12 {
                 &blas_buffer_desc, 
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
                 std::ptr::null(), 
-                &mut blas as *mut _ as _,
+                &mut self.blas as *mut _ as _,
             )?
         };
 
+        let blas_scratch = self.blas_scratch.as_ref().expect("Failed to create blas scratch");
+        let blas = self.blas.as_ref().expect("Failed to create blas");
+
+        //アクセラレーションストラクチャー構築
+        build_as_desc.ScratchAccelerationStructureData = unsafe { blas_scratch.GetGPUVirtualAddress() };
+        build_as_desc.DestAccelerationStructureData = unsafe { blas.GetGPUVirtualAddress() };
+
+        //コマンドリストに積んで実行
+        let command_list4: ID3D12GraphicsCommandList4 = command_list.cast()?;
+        //もしかしてCopyしてるから反映されない？
+        unsafe {
+            command_list4.BuildRaytracingAccelerationStructure(
+                &build_as_desc, 
+                0, 
+                std::ptr::null(),
+            );
+        }
+
+        //リソースバリアの設定
+        let uav_barrier = D3D12_RESOURCE_BARRIER {
+            Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+            Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                    pResource: Some(blas.clone()),
+                }),
+            },
+            ..Default::default()
+        };
+
+        unsafe {
+            command_list4.ResourceBarrier(1, &uav_barrier);
+            command_list4.Close()?;
+            let cmd_lists = ID3D12CommandList::from(&command_list4);
+            queue.ExecuteCommandLists(1, &Some(cmd_lists));
+        };
+        
+        
         Ok(())
+    }
+
+    fn wait_for_previous_frame(&mut self) {
+
+        let queue = self.command_queue.as_ref().expect("You haven't done initializing a command queue");
+        let fence = self.fence.as_ref().expect("You haven't done initializing a fence");
+        let swap_chain = self.swap_chain.as_ref().expect("You haven't done initializing a swap chain");
+
+        let fence_value = self.fence_value;
+
+        unsafe {
+            queue.Signal(&self.fence, fence_value)
+        }
+        .ok()
+        //Optionをunwrapしなければいけない？
+        .unwrap();
+
+        self.fence_value += 1;
+
+        if unsafe { fence.GetCompletedValue() } < fence_value {
+            unsafe {
+                fence.SetEventOnCompletion(fence_value, self.fence_event)
+            }
+            .ok()
+            .unwrap();
+
+            unsafe { WaitForSingleObject(self.fence_event, INFINITE) };
+        }
+
+        self.frame_index = unsafe { swap_chain.GetCurrentBackBufferIndex() };
+    }
+
+    fn present(&mut self) {
+
     }
 
     pub fn update(&mut self) {
