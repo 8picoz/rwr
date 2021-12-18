@@ -25,6 +25,8 @@ pub fn run_with_raytracing() -> Result<()> {
     wnd.check_raytracing_support().unwrap_or_else(|e| panic!("{}", e));
     wnd.init_dxr().unwrap_or_else(|e| panic!("{}", e));
 
+    println!("initialized");
+
     message_main_loop();
 
     Ok(())
@@ -159,7 +161,8 @@ impl Wnd {
         ];
 
         self.dx.create_vertex_buffer(tri)?;
-        self.dx.build_acceleration_structure().expect("Failed to build acceleration structure");
+        self.dx.build_blas().expect("Failed to build bottom level acceleration structure");
+        self.dx.build_tlas().expect("Failed to build top level acceleration structure");
 
         Ok(())
     }
@@ -178,7 +181,6 @@ impl Wnd {
             }
         }
     }
-
     
     extern "system" fn wndproc(
         window: HWND,
