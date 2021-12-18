@@ -129,12 +129,12 @@ impl Wnd {
             }
         }
 
-        self.dx.create_device().expect("Failed to create device");
-        self.dx.create_factory().expect("Failed to create dxgi factory");
-        self.dx.create_command_queue().expect("Failed to create command queue");
-        self.dx.create_command_allocator().expect("Failed to create command allocator");
-        self.dx.create_command_list().expect("Failed to create command list");
-        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create swap chain");
+        self.dx.create_device().expect("Failed to create a device");
+        self.dx.create_factory().expect("Failed to create a dxgi factory");
+        self.dx.create_command_queue().expect("Failed to create a command queue");
+        self.dx.create_command_allocator().expect("Failed to create a command allocator");
+        self.dx.create_command_list().expect("Failed to create a command list");
+        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create a swap chain");
         self.dx.create_fence().expect("Failed to create a fence");
     
         Ok(())
