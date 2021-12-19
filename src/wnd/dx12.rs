@@ -1,5 +1,7 @@
 mod shader_resource_view;
 
+use std::borrow::Cow;
+
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
     Win32::Graphics::Direct3D12::*, Win32::Graphics::Dxgi::Common::*, Win32::Graphics::Dxgi::*,
@@ -712,6 +714,14 @@ impl Dx12 {
         }
 
         Ok(fence_value + 1)
+    }
+
+    fn compile_shader<'a>(path: impl Into<Cow<'a, str>>) -> Result<()> {
+        let path = path.into();
+
+        
+        
+        Ok(())
     }
 
     fn present(&mut self) {
