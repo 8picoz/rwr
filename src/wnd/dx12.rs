@@ -693,7 +693,7 @@ impl Dx12 {
 
     pub fn create_global_root_signature(&mut self) -> Result<()> {
 
-        let device = self.device.as_ref().expect("You have to initialize a device");
+        let device: ID3D12Device5 = self.device.as_ref().expect("You have to initialize a device").cast()?;
 
         //TLASをt0レジスタに割り当てる用の設定
         let mut desc_range_tlas = D3D12_DESCRIPTOR_RANGE {
@@ -741,15 +741,18 @@ impl Dx12 {
         };
         
         unsafe {
-            let mut blob = D3DCreateBlob(1024)?;
-            let mut err_blob = D3DCreateBlob(1024)?;
+            let mut blob = Some(D3DCreateBlob(1024)?);
+            let mut err_blob = Some(D3DCreateBlob(1024)?);
 
             D3D12SerializeRootSignature(
                 &root_sig_desc, 
-                D3D_ROOT_SIGNATURE_VERSION_1_0, 
-                &mut blob as *mut _ as _, 
-                &mut err_blob as *mut _ as _
+                D3D_ROOT_SIGNATURE_VERSION_1, 
+                &mut blob, 
+                &mut err_blob
             )?;
+
+            let blob = blob.unwrap();
+            //let err_blob = err_blob.unwrap();
 
             let root_sig: ID3D12RootSignature = device.CreateRootSignature(
                 0,
