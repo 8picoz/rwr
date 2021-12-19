@@ -276,7 +276,7 @@ impl Dx12 {
         let vertex_buffer = self.vb.as_ref().expect("You have to initialize a vertex buffer");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
         let queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
-        let command_allocators = self.command_allocator.as_ref().expect("You have to initialize a command allocator");
+        let command_allocator = &self.command_allocator.as_ref().expect("You have to initialize a command allocator")[self.frame_index as usize];
         let fence = self.fence.as_ref().expect("You have to initialize a fence");
 
         //まずBLASに必要なメモリ量を求める
@@ -436,8 +436,8 @@ impl Dx12 {
         //リソースバリア
         self.fence_value = Self::wait_for_gpu(queue, fence, self.fence_value, &self.fence_event)?;
         
-        //ここでcommand_listをリセットすべきかどうか
-        //unsafe { command_list4.Reset(&command_allocators[self.frame_index as usize], None)? };
+        //command_listがレコード状態でResetをかけるとエラーとなるので使った後に必ずResetをかけることで二重Resetを防ぐ
+        unsafe { command_list.Reset(command_allocator, None)? };
 
         Ok(())
     }
@@ -447,8 +447,8 @@ impl Dx12 {
         let device = self.device.as_ref().expect("You have to initialize a device");
         let vertex_buffer = self.vb.as_ref().expect("You have to initialize a vertex buffer");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
+        let command_allocator = &self.command_allocator.as_ref().expect("You have to initialize a command allocator")[self.frame_index as usize];
         let queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
-        let command_allocators = self.command_allocator.as_ref().expect("You have to initialize a command allocator");
         let fence = self.fence.as_ref().expect("You have to initialize a fence");
 
         let blas = self.blas.as_ref().expect("You have to build a blas");
@@ -680,6 +680,8 @@ impl Dx12 {
                 heap.GetCPUDescriptorHandleForHeapStart(),
             );
         }
+
+        unsafe { command_list.Reset(command_allocator, None)? };
 
         Ok(())
     }
