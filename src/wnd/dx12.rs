@@ -32,6 +32,8 @@ pub struct Dx12 {
 
     heap: Option<ID3D12DescriptorHeap>,
 
+    global_root_signature: Option<ID3D12RootSignature>,
+
     //Fence
     fence: Option<ID3D12Fence>,
     fence_value: u64,
@@ -60,6 +62,7 @@ impl Dx12 {
             tlas_scratch: None,
             tlas: None,
             heap: None,
+            global_root_signature: None,
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
@@ -236,12 +239,12 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &heap_prop, 
+                &heap_prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &resource_desc, 
+                &resource_desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
-                &mut self.vb,
+                &mut self.vb as *mut _ as _,
             )?;
         };
 
@@ -324,8 +327,8 @@ impl Dx12 {
         unsafe { 
             //必要なメモリ量を求める
             device5.GetRaytracingAccelerationStructurePrebuildInfo(
-                inputs, 
-                &mut blas_pre_build
+                inputs as *const _ as _, 
+                &mut blas_pre_build as *mut _ as _
             ) 
         };
 
@@ -359,9 +362,9 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &scratch_desc, 
+                &scratch_desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
                 std::ptr::null(), 
                 &mut self.blas_scratch as *mut _ as _,
@@ -386,9 +389,9 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &blas_buffer_desc, 
+                &blas_buffer_desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
                 std::ptr::null(), 
                 &mut self.blas as *mut _ as _,
@@ -411,7 +414,7 @@ impl Dx12 {
 
         unsafe {
             command_list4.BuildRaytracingAccelerationStructure(
-                &build_as_desc, 
+                &build_as_desc as *const _ as _, 
                 0, 
                 std::ptr::null(),
             );
@@ -501,9 +504,9 @@ impl Dx12 {
         let mut instance_desc_buffer: Option<ID3D12Resource> = None;
         unsafe {
             device.CreateCommittedResource(
-                &prop, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &desc, 
+                &desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
                 &mut instance_desc_buffer as *mut _ as _
@@ -515,8 +518,8 @@ impl Dx12 {
             
             vertex_buffer.Map(0, std::ptr::null(), &mut data)?;
             std::ptr::copy_nonoverlapping(
-                &instance_desc as *const _, 
-                data as *mut D3D12_RAYTRACING_INSTANCE_DESC, 
+                &instance_desc as *const _ as _, 
+                data as *mut _ as _, 
                 1
             );
             vertex_buffer.Unmap(0, std::ptr::null());
@@ -544,8 +547,8 @@ impl Dx12 {
 
         unsafe {
             device5.GetRaytracingAccelerationStructurePrebuildInfo(
-                inputs, 
-                &mut tlas_pre_build
+                inputs as *const _ as _, 
+                &mut tlas_pre_build as *mut _ as _,
             );
         }
 
@@ -577,9 +580,9 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &scratch_desc, 
+                &scratch_desc as *const _ as _,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
                 std::ptr::null(), 
                 &mut self.tlas_scratch as *mut _ as _,
@@ -604,9 +607,9 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &tlas_buffer_desc, 
+                &tlas_buffer_desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
                 std::ptr::null(), 
                 &mut self.tlas as *mut _ as _,
@@ -678,12 +681,86 @@ impl Dx12 {
         unsafe {
             device.CreateShaderResourceView(
                 None, 
-                &srv_desc, 
+                &srv_desc as *const _ as _, 
                 heap.GetCPUDescriptorHandleForHeapStart(),
             );
         }
 
         unsafe { command_list.Reset(command_allocator, None)? };
+
+        Ok(())
+    }
+
+    pub fn create_global_root_signature(&mut self) -> Result<()> {
+
+        let device = self.device.as_ref().expect("You have to initialize a device");
+
+        //TLASをt0レジスタに割り当てる用の設定
+        let mut desc_range_tlas = D3D12_DESCRIPTOR_RANGE {
+            BaseShaderRegister: 0, //t0レジスタ
+            NumDescriptors: 1,
+            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_SRV,
+            ..Default::default()
+        };
+
+        //UAVの出力バッファをu0レジスタに割り当てる用の設定
+        let mut desc_range_output = D3D12_DESCRIPTOR_RANGE {
+            BaseShaderRegister: 0, //u0レジスタ
+            NumDescriptors: 1,
+            RangeType: D3D12_DESCRIPTOR_RANGE_TYPE_UAV,
+            ..Default::default()
+        };
+
+        let mut root_params = [
+            D3D12_ROOT_PARAMETER {
+                ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
+                Anonymous: D3D12_ROOT_PARAMETER_0 {
+                    DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                        NumDescriptorRanges: 1,
+                        pDescriptorRanges: &mut desc_range_tlas as *mut _ as _,
+                    }
+                },
+                ..Default::default()
+            }, 
+            D3D12_ROOT_PARAMETER {
+                Anonymous: D3D12_ROOT_PARAMETER_0 {
+                    DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
+                        NumDescriptorRanges: 1,
+                        pDescriptorRanges: &mut desc_range_output as *mut _ as _,
+                    }
+                },
+                ..Default::default()
+            },
+        ];
+
+
+        let root_sig_desc = D3D12_ROOT_SIGNATURE_DESC {
+            NumParameters: root_params.len() as u32,
+            pParameters: &mut root_params as *mut _ as _,
+            ..Default::default()
+        };
+        
+        unsafe {
+            let mut blob = D3DCreateBlob(1024)?;
+            let mut err_blob = D3DCreateBlob(1024)?;
+
+            D3D12SerializeRootSignature(
+                &root_sig_desc, 
+                D3D_ROOT_SIGNATURE_VERSION_1_0, 
+                &mut blob as *mut _ as _, 
+                &mut err_blob as *mut _ as _
+            )?;
+
+            let root_sig: ID3D12RootSignature = device.CreateRootSignature(
+                0,
+                blob.GetBufferPointer(),
+                blob.GetBufferSize()
+            )?;
+            
+            root_sig.SetName("GlobalRootSignature")?;
+            
+            self.global_root_signature = Some(root_sig);
+        }
 
         Ok(())
     }

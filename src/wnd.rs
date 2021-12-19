@@ -123,10 +123,11 @@ impl Wnd {
     
         if cfg!(debug_assertions) {
             
-            let mut debug: Option<ID3D12Debug> = None;
+            let mut debug: Option<ID3D12Debug5> = None;
             unsafe {
                 if let Some(debug) = D3D12GetDebugInterface(&mut debug).ok().and(debug) {
                     debug.EnableDebugLayer();
+                    debug.SetEnableGPUBasedValidation(true);
                 }
             }
         }
@@ -163,6 +164,7 @@ impl Wnd {
         self.dx.create_vertex_buffer(tri)?;
         self.dx.build_blas().expect("Failed to build bottom level acceleration structure");
         self.dx.build_tlas().expect("Failed to build top level acceleration structure");
+        self.dx.create_global_root_signature().expect("Failed to create global root signature");
 
         Ok(())
     }
