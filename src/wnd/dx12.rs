@@ -760,7 +760,7 @@ impl Dx12 {
                 blob.GetBufferSize()
             )?;
             
-            root_sig.SetName("GlobalRootSignature")?;
+            root_sig.SetName("global_root_signature")?;
             
             self.global_root_signature = Some(root_sig);
         }
@@ -797,9 +797,12 @@ impl Dx12 {
     }
 
     fn compile_shader<'a>(path: impl Into<Cow<'a, str>>) -> Result<()> {
-        let path = path.into();
+        let path: &str = &path.into();
 
-        
+        let mut shader = None;
+        let shader = unsafe {
+            DxcCreateInstance();
+        };
         
         Ok(())
     }

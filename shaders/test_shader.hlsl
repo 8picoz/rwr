@@ -3,22 +3,24 @@ RWTexture2D<float4> gOutput : register(u0);
 
 struct Payload {
     float3 color;
-}
+};
 
 struct MyAttribute {
     float2 barys;
 };
 
-//Ray Generation ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
-//ä»¤ã‚’ç™ºå°„ã™ã‚‹ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
+//Ray Generation ƒVƒF[ƒ_[
+//—ß‚ğ”­Ë‚·‚éƒVƒF[ƒ_[
 [shader("raygeneration")]
 void mainRayGen() {
     uint2 launchIndex = DispatchRaysIndex().xy;
-    float2 dime = float2(DispatchRaysDimensions().xy);
-    float2 d = (launchIndex.xy + 0.5) / dime.xy * 2.0 - 1.0;
+    float2 dims = float2(DispatchRaysDimensions().xy);
+
+    float2 d = (launchIndex.xy + 0.5) / dims.xy * 2.0 - 1.0;
+
     RayDesc rayDesc;
     rayDesc.Origin = float3(d.x, -d.y, 1);
-    rayDesc.Direction = float4(0, 0, -1);
+    rayDesc.Direction = float3(0, 0, -1);
     rayDesc.TMin = 0;
     rayDesc.TMax = 100000;
 
@@ -26,33 +28,35 @@ void mainRayGen() {
     payload.color = float3(0, 0, 0);
 
     RAY_FLAG flags = RAY_FLAG_NONE;
-    uint flags = 0xFF;
+    uint rayMask = 0xFF;
+
     TraceRay(
         gRtScene,
         flags,
         rayMask,
         0, //ray index
         1, //MultiplierForGeometryContrib
-        0, //ShaderTableã®ã©ã®Miss Shaderã‚’ä½¿ç”¨ã™ã‚‹ã‹ã‚’æŒ‡å®šã™ã‚‹
+        0, //ShaderTable‚Ì‚Ç‚ÌMiss Shader‚ğg—p‚·‚é‚©‚ğw’è‚·‚é
         rayDesc,
         payload
     );
     float3 col = payload.color;
 
-    //çµæœæ ¼ç´
+    //Œ‹‰ÊŠi”[
     gOutput[launchIndex.xy] = float4(col, 1);
 }
 
-//Miss ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
-//ãƒ¬ã‚¤ãŒã©ã®ã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã«ã‚‚è¡çªã—ãªã‹ã£ãŸã¨ãã«å‘¼ã°ã‚Œã‚‹ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
-[shader("mixx")]
-void mainMS(input Payload payload) {
+//Miss ƒVƒF[ƒ_[
+//ƒŒƒC‚ª‚Ç‚ÌƒIƒuƒWƒFƒNƒg‚É‚àÕ“Ë‚µ‚È‚©‚Á‚½‚Æ‚«‚ÉŒÄ‚Î‚ê‚éƒVƒF[ƒ_[
+[shader("miss")]
+void mainMS(inout Payload payload) {
     payload.color = float3(0.4, 0.8, 0.9);
 }
 
-//ClosestHit ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
-//ãƒ¬ã‚¤ãŒã‚ªãƒ–ã‚¸ã‚§ã‚¯ãƒˆã«è¡çªã—ãŸã¨ãã«å‘¼ã°ã‚Œã‚‹ã‚·ã‚§ãƒ¼ãƒ€ãƒ¼
-void mainCHS(inout Paylaod payload, MyAttribute attrib) {
+//ClosestHit ƒVƒF[ƒ_[
+//ƒŒƒC‚ªƒIƒuƒWƒFƒNƒg‚ÉÕ“Ë‚µ‚½‚Æ‚«‚ÉŒÄ‚Î‚ê‚éƒVƒF[ƒ_[
+[shader("closesthit")]
+void mainCHS(inout Payload payload, MyAttribute attrib) {
     float3 col = 0;
     col.xy = attrib.barys;
     col.z = 1.0 - col.x - col.y;
