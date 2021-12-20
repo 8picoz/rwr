@@ -12,7 +12,7 @@ struct MyAttribute {
 //Ray Generation シェーダー
 //令を発射するシェーダー
 [shader("raygeneration")]
-void mainRayGen() {
+void MainRayGen() {
     uint2 launchIndex = DispatchRaysIndex().xy;
     float2 dims = float2(DispatchRaysDimensions().xy);
 
@@ -49,14 +49,14 @@ void mainRayGen() {
 //Miss シェーダー
 //レイがどのオブジェクトにも衝突しなかったときに呼ばれるシェーダー
 [shader("miss")]
-void mainMS(inout Payload payload) {
+void MainMiss(inout Payload payload) {
     payload.color = float3(0.4, 0.8, 0.9);
 }
 
 //ClosestHit シェーダー
 //レイがオブジェクトに衝突したときに呼ばれるシェーダー
 [shader("closesthit")]
-void mainCHS(inout Payload payload, MyAttribute attrib) {
+void MainClosestHit(inout Payload payload, MyAttribute attrib) {
     float3 col = 0;
     col.xy = attrib.barys;
     col.z = 1.0 - col.x - col.y;

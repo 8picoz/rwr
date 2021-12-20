@@ -38,10 +38,21 @@ pub struct Dx12 {
     fence: Option<ID3D12Fence>,
     fence_value: u64,
     fence_event: HANDLE,
+
+    //shader symbols
+    ray_gen_symbol: &'static str,
+    miss_symbol: &'static str,
+    closest_hit_symbol: &'static str,
+
+    //shader
+    ray_shader_blob: ID3DBlob,
 }
 
 impl Dx12 {
     pub fn new(width: u32, height: u32, frame_count: u32) -> Self {
+
+        //[TODO]: argsで受け取れるように
+        let ray_shader_blob = Self::load_shader("./ray_shader.cso").expect("Failed to load ray shader");
 
         Dx12 { 
             width, 
@@ -66,6 +77,10 @@ impl Dx12 {
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
+            ray_gen_symbol: "MainRayGen",
+            miss_symbol: "MainMiss",
+            closest_hit_symbol: "MainClosestHit",
+            ray_shader_blob,
         }
     }
 
@@ -741,8 +756,8 @@ impl Dx12 {
         };
         
         unsafe {
-            let mut blob = Some(D3DCreateBlob(1024)?);
-            let mut err_blob = Some(D3DCreateBlob(1024)?);
+            let mut blob: Option<ID3DBlob> = Some(D3DCreateBlob(1024)?);
+            let mut err_blob: Option<ID3DBlob> = Some(D3DCreateBlob(1024)?);
 
             D3D12SerializeRootSignature(
                 &root_sig_desc, 
@@ -764,6 +779,47 @@ impl Dx12 {
             
             self.global_root_signature = Some(root_sig);
         }
+
+        Ok(())
+    }
+
+    pub fn create_state_object(&mut self) -> Result<()> {
+
+        let mut sub_objects = vec![];
+
+        let mut exports = [
+            D3D12_EXPORT_DESC { 
+                Name: PWSTR(self.ray_gen_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+                ExportToRename: PWSTR(std::ptr::null_mut()),
+                Flags: D3D12_EXPORT_FLAG_NONE
+            },
+            D3D12_EXPORT_DESC { 
+                Name: PWSTR(self.miss_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+                ExportToRename: PWSTR(std::ptr::null_mut()),
+                Flags: D3D12_EXPORT_FLAG_NONE
+            },
+            D3D12_EXPORT_DESC { 
+                Name: PWSTR(self.closest_hit_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+                ExportToRename: PWSTR(std::ptr::null_mut()),
+                Flags: D3D12_EXPORT_FLAG_NONE
+            },
+        ];
+
+        let mut dxil_lib_desc = D3D12_DXIL_LIBRARY_DESC {
+            DXILLibrary: D3D12_SHADER_BYTECODE {
+                pShaderBytecode: unsafe { self.ray_shader_blob.GetBufferPointer() },
+                BytecodeLength: unsafe { self.ray_shader_blob.GetBufferSize() },
+            },
+            pExports: &mut exports as *mut _ as _,
+            NumExports: exports.len() as u32,
+        };
+
+        sub_objects.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
+                pDesc: &mut dxil_lib_desc as *mut _ as _,
+            }
+        );
 
         Ok(())
     }
