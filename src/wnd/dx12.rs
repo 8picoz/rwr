@@ -796,15 +796,12 @@ impl Dx12 {
         Ok(fence_value + 1)
     }
 
-    fn compile_shader<'a>(path: impl Into<Cow<'a, str>>) -> Result<()> {
+    fn load_shader<'a>(path: impl Into<Cow<'a, str>>) -> Result<ID3DBlob> {
         let path: &str = &path.into();
 
-        let mut shader = None;
-        let shader = unsafe {
-            DxcCreateInstance();
-        };
-        
-        Ok(())
+        Ok(unsafe {
+            D3DReadFileToBlob(path)?
+        })
     }
 
     fn present(&mut self) {
