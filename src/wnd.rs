@@ -112,7 +112,6 @@ impl Wnd {
                 &mut dx as *mut _ as _,
             )
         };
-        debug_assert!(!hwnd.is_invalid());
     
         unsafe { ShowWindow(hwnd, SW_SHOW) };
     
@@ -128,6 +127,7 @@ impl Wnd {
                 if let Some(debug) = D3D12GetDebugInterface(&mut debug).ok().and(debug) {
                     debug.EnableDebugLayer();
                     debug.SetEnableGPUBasedValidation(true);
+                    println!("dsadsa");
                 }
             }
         }

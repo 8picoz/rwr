@@ -1,4 +1,4 @@
-use std::{borrow::Cow, ffi::c_void};
+use std::borrow::Cow;
 
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
@@ -12,12 +12,12 @@ pub struct Dx12 {
     width: u32,
     height: u32,
     frame_count: u32,
-    device: Option<ID3D12Device>,
+    device: Option<ID3D12Device5>,
     command_queue: Option<ID3D12CommandQueue>,
     dxgi_factory: Option<IDXGIFactory4>,
     swap_chain: Option<IDXGISwapChain3>,
     command_allocator: Option<Vec<ID3D12CommandAllocator>>,
-    command_list: Option<Vec<ID3D12GraphicsCommandList>>,
+    command_list: Option<Vec<ID3D12GraphicsCommandList4>>,
     frame_index: u32,
 
     vb: Option<ID3D12Resource>,
@@ -38,12 +38,12 @@ pub struct Dx12 {
     fence_event: HANDLE,
 
     //shader symbols
-    ray_gen_symbol: &'static str,
-    miss_symbol: &'static str,
-    closest_hit_symbol: &'static str,
+    ray_gen_symbol: Vec<u16>,
+    miss_symbol: Vec<u16>,
+    closest_hit_symbol: Vec<u16>,
 
     //hit group
-    default_hit_group_symbol: &'static str,
+    default_hit_group_symbol: Vec<u16>,
 
     //shader
     ray_shader_blob: ID3DBlob,
@@ -79,10 +79,10 @@ impl Dx12 {
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
-            ray_gen_symbol: "MainRayGen",
-            miss_symbol: "MainMiss",
-            closest_hit_symbol: "MainClosestHit",
-            default_hit_group_symbol: "DefaultHitGroup",
+            ray_gen_symbol: "MainRayGen".encode_utf16().collect(),
+            miss_symbol: "MainMiss".encode_utf16().collect(),
+            closest_hit_symbol: "MainClosestHit".encode_utf16().collect(),
+            default_hit_group_symbol: "DefaultHitGroup".encode_utf16().collect(),
             ray_shader_blob,
         }
     }
@@ -90,7 +90,7 @@ impl Dx12 {
     //create系はcreate_swapchainがhwndを必要とするので統一性を持たせるためにnew()で呼ばないようにしている
 
     pub fn create_device(&mut self) -> Result<()> {
-        let mut device: Option<ID3D12Device> = None;
+        let mut device: Option<ID3D12Device5> = None;
         //H/WアダプタをNoneにすることでデフォルトを指定
         unsafe { D3D12CreateDevice( None, D3D_FEATURE_LEVEL_12_0, &mut device) }?;
 
@@ -146,7 +146,7 @@ impl Dx12 {
             OutputWindow: *hwnd,
             Windowed: BOOL::from(true),
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-            Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH.0 as _,
+            Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH as _,
         };
 
         self.swap_chain = Some(unsafe {
@@ -179,7 +179,7 @@ impl Dx12 {
         let device = self.device.as_ref().expect("You have to initialize a device");
         let command_allocators = self.command_allocator.as_ref().expect("You have to initialize a command allocator");
 
-        let mut cmd_lists: Vec<ID3D12GraphicsCommandList> = vec![];
+        let mut cmd_lists: Vec<ID3D12GraphicsCommandList4> = vec![];
         //コマンドリストはRTVごとに作らなくて良いので後で修正
         for alc in command_allocators {
             cmd_lists.push(
@@ -340,11 +340,9 @@ impl Dx12 {
             ..Default::default()
         };
 
-        let device5: ID3D12Device5 = device.cast()?;
-
         unsafe { 
             //必要なメモリ量を求める
-            device5.GetRaytracingAccelerationStructurePrebuildInfo(
+            device.GetRaytracingAccelerationStructurePrebuildInfo(
                 inputs as *const _ as _, 
                 &mut blas_pre_build as *mut _ as _
             ) 
@@ -424,14 +422,13 @@ impl Dx12 {
         build_as_desc.DestAccelerationStructureData = unsafe { blas.GetGPUVirtualAddress() };
 
         //コマンドリストに積んで実行
-        let command_list4: ID3D12GraphicsCommandList4 = command_list.cast()?;
         //もしかしてCopyしてるから反映されない？
 
         //BLASを実際にビルド
         //疑問: TLASと一緒にコマンドリストに登録sh知恵ビルドではなく一回リセットを挟んでからでも良いのか？
 
         unsafe {
-            command_list4.BuildRaytracingAccelerationStructure(
+            command_list.BuildRaytracingAccelerationStructure(
                 &build_as_desc as *const _ as _, 
                 0, 
                 std::ptr::null(),
@@ -450,10 +447,9 @@ impl Dx12 {
         };
 
         unsafe {
-            command_list4.ResourceBarrier(1, &uav_barrier);
-            command_list4.Close()?;
-            let cmd_lists = ID3D12CommandList::from(&command_list4);
-            queue.ExecuteCommandLists(1, &Some(cmd_lists));
+            command_list.ResourceBarrier(1, &uav_barrier);
+            command_list.Close()?;
+            queue.ExecuteCommandLists(1, &Some(command_list.cast()?));
         };
         
         //リソースバリア
@@ -490,7 +486,7 @@ impl Dx12 {
                         0.0, 1.0, 0.0, 0.0,
                         0.0, 0.0, 1.0, 0.0],
             _bitfield1: 0x0000_00FF, //0x0000_0000 + 0xFF
-            _bitfield2: D3D12_RAYTRACING_INSTANCE_FLAG_NONE.0, //0x0000_0000 + D3D12_RAYTRACING_INSTANCE_FLAG_NONE.0
+            _bitfield2: D3D12_RAYTRACING_INSTANCE_FLAG_NONE, //0x0000_0000 + D3D12_RAYTRACING_INSTANCE_FLAG_NONE.0
             AccelerationStructure: unsafe { blas.GetGPUVirtualAddress() }
         };
 
@@ -561,10 +557,8 @@ impl Dx12 {
             ..Default::default()
         };
 
-        let device5: ID3D12Device5 = device.cast()?;
-
         unsafe {
-            device5.GetRaytracingAccelerationStructurePrebuildInfo(
+            device.GetRaytracingAccelerationStructurePrebuildInfo(
                 inputs as *const _ as _, 
                 &mut tlas_pre_build as *mut _ as _,
             );
@@ -642,10 +636,8 @@ impl Dx12 {
         build_as_desc.ScratchAccelerationStructureData = unsafe { tlas_scratch.GetGPUVirtualAddress() };
         build_as_desc.DestAccelerationStructureData = unsafe { tlas.GetGPUVirtualAddress() };
 
-        let command_list4: ID3D12GraphicsCommandList4 = command_list.cast()?;
-
         unsafe {
-            command_list4.BuildRaytracingAccelerationStructure(
+            command_list.BuildRaytracingAccelerationStructure(
                 &build_as_desc, 
                 0, 
                 std::ptr::null(),
@@ -663,10 +655,9 @@ impl Dx12 {
         };
 
         unsafe {
-            command_list4.ResourceBarrier(1, &uav_barrier);
-            command_list4.Close()?;
-            let cmd_lists = ID3D12CommandList::from(&command_list4);
-            queue.ExecuteCommandLists(1, &Some(cmd_lists));
+            command_list.ResourceBarrier(1, &uav_barrier);
+            command_list.Close()?;
+            queue.ExecuteCommandLists(1, &Some(command_list.cast()?));
         };
         
         self.fence_value = Self::wait_for_gpu(queue, fence, self.fence_value, &self.fence_event)?;
@@ -680,7 +671,7 @@ impl Dx12 {
         };
 
         self.heap = Some(unsafe {
-            device5.CreateDescriptorHeap(&heap_desc)?
+            device.CreateDescriptorHeap(&heap_desc)?
         });
 
         let heap = self.heap.as_ref().unwrap();
@@ -711,7 +702,7 @@ impl Dx12 {
 
     pub fn create_global_root_signature(&mut self) -> Result<()> {
 
-        let device: ID3D12Device5 = self.device.as_ref().expect("You have to initialize a device").cast()?;
+        let device = self.device.as_ref().expect("You have to initialize a device");
 
         //TLASをt0レジスタに割り当てる用の設定
         let mut desc_range_tlas = D3D12_DESCRIPTOR_RANGE {
@@ -759,8 +750,8 @@ impl Dx12 {
         };
         
         unsafe {
-            let mut blob: Option<ID3DBlob> = Some(D3DCreateBlob(1024)?);
-            let mut err_blob: Option<ID3DBlob> = Some(D3DCreateBlob(1024)?);
+            let mut blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
+            let mut err_blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
 
             D3D12SerializeRootSignature(
                 &root_sig_desc, 
@@ -769,7 +760,7 @@ impl Dx12 {
                 &mut err_blob
             )?;
 
-            let blob = blob.unwrap();
+            let blob: ID3DBlob = blob.unwrap();
             //let err_blob = err_blob.unwrap();
 
             let root_sig: ID3D12RootSignature = device.CreateRootSignature(
@@ -777,7 +768,7 @@ impl Dx12 {
                 blob.GetBufferPointer(),
                 blob.GetBufferSize()
             )?;
-            
+    
             root_sig.SetName("global_root_signature")?;
             
             self.global_root_signature = Some(root_sig);
@@ -788,115 +779,141 @@ impl Dx12 {
 
     pub fn create_state_object(&mut self) -> Result<()> {
 
-        let device: ID3D12Device5 = self.device.as_ref().expect("You have to initialize a device").cast()?;
+        let device = self.device.as_ref().expect("You have to initialize a device");
 
         //global root sigantureの生成とメソッドを分けるべきか？
 
-        let mut sub_objects = vec![];
+        let mut global_root_signature = D3D12_GLOBAL_ROOT_SIGNATURE {
+            pGlobalRootSignature: self.global_root_signature.clone(),
+        };
 
-        //シンボルをエクスポート
+        let desc = D3D12_ROOT_SIGNATURE_DESC::default();
+
+        let local = unsafe {
+            let mut blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
+            let mut err_blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
+
+            D3D12SerializeRootSignature(
+                &desc, 
+                D3D_ROOT_SIGNATURE_VERSION_1, 
+                &mut blob, 
+                &mut err_blob
+            )?;
+
+            let blob: ID3DBlob = blob.unwrap();
+            //let err_blob = err_blob.unwrap();
+
+            let root_sig: ID3D12RootSignature = device.CreateRootSignature(
+                0,
+                blob.GetBufferPointer(),
+                blob.GetBufferSize()
+            )?;
+    
+            root_sig.SetName("global_root_signature")?;
+            
+            Some(root_sig)
+        };
+        
+        let mut local_root_signature = D3D12_LOCAL_ROOT_SIGNATURE {
+            pLocalRootSignature: local,
+        };
 
         let mut exports = [
-            D3D12_EXPORT_DESC { 
-                Name: PWSTR(self.ray_gen_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-                ExportToRename: PWSTR(std::ptr::null_mut()),
-                Flags: D3D12_EXPORT_FLAG_NONE
+            D3D12_EXPORT_DESC {
+                Name: PWSTR(self.ray_gen_symbol.as_mut_ptr()),
+                Flags: D3D12_EXPORT_FLAG_NONE,
+                ..Default::default()
             },
-            D3D12_EXPORT_DESC { 
-                Name: PWSTR(self.miss_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-                ExportToRename: PWSTR(std::ptr::null_mut()),
-                Flags: D3D12_EXPORT_FLAG_NONE
+            D3D12_EXPORT_DESC {
+                Name: PWSTR(self.miss_symbol.as_mut_ptr()),
+                Flags: D3D12_EXPORT_FLAG_NONE,
+                ..Default::default()
             },
-            D3D12_EXPORT_DESC { 
-                Name: PWSTR(self.closest_hit_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-                ExportToRename: PWSTR(std::ptr::null_mut()),
-                Flags: D3D12_EXPORT_FLAG_NONE
+            D3D12_EXPORT_DESC {
+                Name: PWSTR(self.closest_hit_symbol.as_mut_ptr()),
+                Flags: D3D12_EXPORT_FLAG_NONE,
+                ..Default::default()
             },
         ];
+        
+        let mut hit_group_desc = D3D12_HIT_GROUP_DESC {
+            Type: D3D12_HIT_GROUP_TYPE_TRIANGLES,
+            ClosestHitShaderImport: PWSTR(self.closest_hit_symbol.as_mut_ptr()),
+            HitGroupExport: PWSTR(self.default_hit_group_symbol.as_mut_ptr()),
+            ..Default::default()
+        };
 
         let mut dxil_lib_desc = D3D12_DXIL_LIBRARY_DESC {
             DXILLibrary: D3D12_SHADER_BYTECODE {
                 pShaderBytecode: unsafe { self.ray_shader_blob.GetBufferPointer() },
                 BytecodeLength: unsafe { self.ray_shader_blob.GetBufferSize() },
             },
-            pExports: &mut exports as *mut _ as _,
             NumExports: exports.len() as u32,
+            pExports: exports.as_mut_ptr(),
         };
-
-        sub_objects.push(
-            D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
-                pDesc: &mut dxil_lib_desc as *mut _ as _,
-            }
-        );
-
-        //ヒットグループの生成
-
-        let mut hit_group_desc = D3D12_HIT_GROUP_DESC {
-            Type: D3D12_HIT_GROUP_TYPE_TRIANGLES,
-            ClosestHitShaderImport: PWSTR(self.closest_hit_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-            HitGroupExport: PWSTR(self.default_hit_group_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
-            ..Default::default()
-        };
-
-        sub_objects.push(
-            D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,
-                pDesc: &mut hit_group_desc as *mut _ as _,
-            }
-        );
-
-        //グローバルルートシグニチャをsubobjectに追加
-
-        let mut global_root_signature = D3D12_GLOBAL_ROOT_SIGNATURE {
-            //cloneしても良いか？
-            pGlobalRootSignature: self.global_root_signature.clone(),
-        };
-
-        sub_objects.push(
-            D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,
-                pDesc: &mut global_root_signature as *mut _ as _,
-            }
-        );
-
-        //シェーダーのペイロードやアトリビュートの設定
 
         let mut shader_config = D3D12_RAYTRACING_SHADER_CONFIG {
-            //XMFLOAT3などの大きさの指定はこれで大丈夫か？
             MaxPayloadSizeInBytes: std::mem::size_of::<[f32; 3]>() as u32,
             MaxAttributeSizeInBytes: std::mem::size_of::<[f32; 2]>() as u32,
         };
 
-        sub_objects.push(
-            D3D12_STATE_SUBOBJECT { 
-                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, 
-                pDesc: &mut shader_config as *mut _ as _,
-            }
-        );
-
-        //レイトレ中のデプス設定
-
-        let mut raytracing_pipeline_config = D3D12_RAYTRACING_PIPELINE_CONFIG {
+        let mut pipeline_config = D3D12_RAYTRACING_PIPELINE_CONFIG {
             MaxTraceRecursionDepth: 1,
         };
 
-        sub_objects.push(
+        let mut sub_objs = vec![
             D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
-                pDesc: &mut raytracing_pipeline_config as *mut _ as _,
-            }
+                Type: D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,
+                pDesc: &mut global_root_signature as *mut _ as _,
+            },
+        ];
+        
+        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE,
+                pDesc: &mut local_root_signature as *mut _ as _,
+            },
         );
 
-        let state_object_desc = D3D12_STATE_OBJECT_DESC {
+        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
+                pDesc: &mut dxil_lib_desc as *mut _ as _,
+            },
+        );
+
+        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,
+                pDesc: &mut hit_group_desc as *mut _ as _,
+            },
+        );
+
+        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,
+                pDesc: &mut shader_config as *mut _ as _,
+            },
+        );
+
+        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
+                pDesc: &mut pipeline_config as *mut _ as _,
+            },
+        );
+
+        let state_obj_desc = D3D12_STATE_OBJECT_DESC {
             Type: D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE,
-            NumSubobjects: sub_objects.len() as u32,
-            pSubobjects: &mut sub_objects as *mut _ as _,
+            NumSubobjects: sub_objs.len() as u32,
+            pSubobjects: sub_objs.as_mut_ptr(),
         };
+
+        println!("{}", sub_objs.len() - 1);
 
         self.state_object = Some(unsafe {
             device.CreateStateObject(
-                &state_object_desc
+                &state_obj_desc
             )?
         });
 
