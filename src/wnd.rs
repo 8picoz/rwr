@@ -132,13 +132,13 @@ impl Wnd {
             }
         }
 
-        self.dx.create_device().expect("Failed to create a device");
-        self.dx.create_factory().expect("Failed to create a dxgi factory");
-        self.dx.create_command_queue().expect("Failed to create a command queue");
-        self.dx.create_command_allocator().expect("Failed to create a command allocator");
-        self.dx.create_command_list().expect("Failed to create a command list");
-        self.dx.create_swap_chain(&self.hwnd).expect("Failed to create a swap chain");
-        self.dx.create_fence().expect("Failed to create a fence");
+        self.dx.create_device()?;
+        self.dx.create_factory()?;
+        self.dx.create_command_queue()?;
+        self.dx.create_command_allocator()?;
+        self.dx.create_command_list()?;
+        self.dx.create_swap_chain(&self.hwnd)?;
+        self.dx.create_fence()?;
     
         Ok(())
     }
@@ -167,9 +167,10 @@ impl Wnd {
         ];
 
         self.dx.create_vertex_buffer(tri)?;
-        self.dx.build_blas().expect("Failed to build bottom level acceleration structure");
-        self.dx.build_tlas().expect("Failed to build top level acceleration structure");
-        self.dx.create_global_root_signature().expect("Failed to create global root signature");
+        self.dx.build_blas()?;
+        self.dx.build_tlas()?;
+        self.dx.create_global_root_signature()?;
+        self.dx.create_state_object()?;
 
         Ok(())
     }

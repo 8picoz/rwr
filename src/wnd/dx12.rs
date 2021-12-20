@@ -1,6 +1,4 @@
-mod shader_resource_view;
-
-use std::borrow::Cow;
+use std::{borrow::Cow, ffi::c_void};
 
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
@@ -29,10 +27,10 @@ pub struct Dx12 {
     blas: Option<ID3D12Resource>,
     tlas_scratch: Option<ID3D12Resource>,
     tlas: Option<ID3D12Resource>,
+    global_root_signature: Option<ID3D12RootSignature>,
+    state_object: Option<ID3D12StateObject>,
 
     heap: Option<ID3D12DescriptorHeap>,
-
-    global_root_signature: Option<ID3D12RootSignature>,
 
     //Fence
     fence: Option<ID3D12Fence>,
@@ -43,6 +41,9 @@ pub struct Dx12 {
     ray_gen_symbol: &'static str,
     miss_symbol: &'static str,
     closest_hit_symbol: &'static str,
+
+    //hit group
+    default_hit_group_symbol: &'static str,
 
     //shader
     ray_shader_blob: ID3DBlob,
@@ -72,14 +73,16 @@ impl Dx12 {
             blas: None,
             tlas_scratch: None,
             tlas: None,
-            heap: None,
             global_root_signature: None,
+            state_object: None,
+            heap: None,
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
             ray_gen_symbol: "MainRayGen",
             miss_symbol: "MainMiss",
             closest_hit_symbol: "MainClosestHit",
+            default_hit_group_symbol: "DefaultHitGroup",
             ray_shader_blob,
         }
     }
@@ -785,7 +788,13 @@ impl Dx12 {
 
     pub fn create_state_object(&mut self) -> Result<()> {
 
+        let device: ID3D12Device5 = self.device.as_ref().expect("You have to initialize a device").cast()?;
+
+        //global root sigantureの生成とメソッドを分けるべきか？
+
         let mut sub_objects = vec![];
+
+        //シンボルをエクスポート
 
         let mut exports = [
             D3D12_EXPORT_DESC { 
@@ -820,6 +829,76 @@ impl Dx12 {
                 pDesc: &mut dxil_lib_desc as *mut _ as _,
             }
         );
+
+        //ヒットグループの生成
+
+        let mut hit_group_desc = D3D12_HIT_GROUP_DESC {
+            Type: D3D12_HIT_GROUP_TYPE_TRIANGLES,
+            ClosestHitShaderImport: PWSTR(self.closest_hit_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+            HitGroupExport: PWSTR(self.default_hit_group_symbol.encode_utf16().collect::<Vec<u16>>().as_mut_ptr()),
+            ..Default::default()
+        };
+
+        sub_objects.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,
+                pDesc: &mut hit_group_desc as *mut _ as _,
+            }
+        );
+
+        //グローバルルートシグニチャをsubobjectに追加
+
+        let mut global_root_signature = D3D12_GLOBAL_ROOT_SIGNATURE {
+            //cloneしても良いか？
+            pGlobalRootSignature: self.global_root_signature.clone(),
+        };
+
+        sub_objects.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,
+                pDesc: &mut global_root_signature as *mut _ as _,
+            }
+        );
+
+        //シェーダーのペイロードやアトリビュートの設定
+
+        let mut shader_config = D3D12_RAYTRACING_SHADER_CONFIG {
+            //XMFLOAT3などの大きさの指定はこれで大丈夫か？
+            MaxPayloadSizeInBytes: std::mem::size_of::<[f32; 3]>() as u32,
+            MaxAttributeSizeInBytes: std::mem::size_of::<[f32; 2]>() as u32,
+        };
+
+        sub_objects.push(
+            D3D12_STATE_SUBOBJECT { 
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG, 
+                pDesc: &mut shader_config as *mut _ as _,
+            }
+        );
+
+        //レイトレ中のデプス設定
+
+        let mut raytracing_pipeline_config = D3D12_RAYTRACING_PIPELINE_CONFIG {
+            MaxTraceRecursionDepth: 1,
+        };
+
+        sub_objects.push(
+            D3D12_STATE_SUBOBJECT {
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
+                pDesc: &mut raytracing_pipeline_config as *mut _ as _,
+            }
+        );
+
+        let state_object_desc = D3D12_STATE_OBJECT_DESC {
+            Type: D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE,
+            NumSubobjects: sub_objects.len() as u32,
+            pSubobjects: &mut sub_objects as *mut _ as _,
+        };
+
+        self.state_object = Some(unsafe {
+            device.CreateStateObject(
+                &state_object_desc
+            )?
+        });
 
         Ok(())
     }
