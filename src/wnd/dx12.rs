@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::ffi::c_void;
 
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
@@ -79,10 +80,10 @@ impl Dx12 {
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
-            ray_gen_symbol: "MainRayGen".encode_utf16().collect(),
-            miss_symbol: "MainMiss".encode_utf16().collect(),
-            closest_hit_symbol: "MainClosestHit".encode_utf16().collect(),
-            default_hit_group_symbol: "DefaultHitGroup".encode_utf16().collect(),
+            ray_gen_symbol: "MainRayGen\0".encode_utf16().collect(),
+            miss_symbol: "MainMiss\0".encode_utf16().collect(),
+            closest_hit_symbol: "MainClosestHit\0".encode_utf16().collect(),
+            default_hit_group_symbol: "DefaultHitGroup\0".encode_utf16().collect(),
             ray_shader_blob,
         }
     }
@@ -787,37 +788,6 @@ impl Dx12 {
             pGlobalRootSignature: self.global_root_signature.clone(),
         };
 
-        let desc = D3D12_ROOT_SIGNATURE_DESC::default();
-
-        let local = unsafe {
-            let mut blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
-            let mut err_blob: Option<ID3DBlob> = Some(D3DCreateBlob(2048)?);
-
-            D3D12SerializeRootSignature(
-                &desc, 
-                D3D_ROOT_SIGNATURE_VERSION_1, 
-                &mut blob, 
-                &mut err_blob
-            )?;
-
-            let blob: ID3DBlob = blob.unwrap();
-            //let err_blob = err_blob.unwrap();
-
-            let root_sig: ID3D12RootSignature = device.CreateRootSignature(
-                0,
-                blob.GetBufferPointer(),
-                blob.GetBufferSize()
-            )?;
-    
-            root_sig.SetName("global_root_signature")?;
-            
-            Some(root_sig)
-        };
-        
-        let mut local_root_signature = D3D12_LOCAL_ROOT_SIGNATURE {
-            pLocalRootSignature: local,
-        };
-
         let mut exports = [
             D3D12_EXPORT_DESC {
                 Name: PWSTR(self.ray_gen_symbol.as_mut_ptr()),
@@ -848,6 +818,7 @@ impl Dx12 {
                 pShaderBytecode: unsafe { self.ray_shader_blob.GetBufferPointer() },
                 BytecodeLength: unsafe { self.ray_shader_blob.GetBufferSize() },
             },
+            //pExportにアクセスしようとしない限り
             NumExports: exports.len() as u32,
             pExports: exports.as_mut_ptr(),
         };
@@ -862,54 +833,38 @@ impl Dx12 {
         };
 
         let mut sub_objs = vec![
+
             D3D12_STATE_SUBOBJECT {
+                //コレは合ってる
                 Type: D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,
                 pDesc: &mut global_root_signature as *mut _ as _,
             },
-        ];
-        
-        sub_objs.push(
             D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_LOCAL_ROOT_SIGNATURE,
-                pDesc: &mut local_root_signature as *mut _ as _,
+                //これは合ってる
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,
+                pDesc: &mut shader_config as *mut _ as _,
             },
-        );
-
-        sub_objs.push(
+            D3D12_STATE_SUBOBJECT {
+                //コレは合ってる
+                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
+                pDesc: &mut pipeline_config as *mut _ as _,
+            },
             D3D12_STATE_SUBOBJECT {
                 Type: D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY,
                 pDesc: &mut dxil_lib_desc as *mut _ as _,
             },
-        );
-
-        sub_objs.push(
             D3D12_STATE_SUBOBJECT {
                 Type: D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP,
                 pDesc: &mut hit_group_desc as *mut _ as _,
             },
-        );
 
-        sub_objs.push(
-            D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,
-                pDesc: &mut shader_config as *mut _ as _,
-            },
-        );
-
-        sub_objs.push(
-            D3D12_STATE_SUBOBJECT {
-                Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
-                pDesc: &mut pipeline_config as *mut _ as _,
-            },
-        );
+        ];
 
         let state_obj_desc = D3D12_STATE_OBJECT_DESC {
             Type: D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE,
             NumSubobjects: sub_objs.len() as u32,
             pSubobjects: sub_objs.as_mut_ptr(),
         };
-
-        println!("{}", sub_objs.len() - 1);
 
         self.state_object = Some(unsafe {
             device.CreateStateObject(
