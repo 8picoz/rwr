@@ -127,7 +127,6 @@ impl Wnd {
                 if let Some(debug) = D3D12GetDebugInterface(&mut debug).ok().and(debug) {
                     debug.EnableDebugLayer();
                     debug.SetEnableGPUBasedValidation(true);
-                    println!("dsadsa");
                 }
             }
         }
@@ -171,6 +170,7 @@ impl Wnd {
         self.dx.build_tlas()?;
         self.dx.create_global_root_signature()?;
         self.dx.create_state_object()?;
+        self.dx.create_result_resource()?;
 
         Ok(())
     }
