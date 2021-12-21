@@ -171,6 +171,7 @@ impl Wnd {
         self.dx.create_global_root_signature()?;
         self.dx.create_state_object()?;
         self.dx.create_result_resource()?;
+        self.dx.create_shader_table()?;
 
         Ok(())
     }

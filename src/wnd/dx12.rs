@@ -31,10 +31,14 @@ pub struct Dx12 {
     global_root_signature: Option<ID3D12RootSignature>,
     state_object: Option<ID3D12StateObject>,
 
-    srv_heap: Option<ID3D12DescriptorHeap>,
+    tlas_descriptor: Option<ID3D12DescriptorHeap>,
 
-    output_buffer: Option<ID3D12Resource>,
-    output_view_heap: Option<ID3D12DescriptorHeap>,
+    result_buffer: Option<ID3D12Resource>,
+    result_resource_descriptor: Option<ID3D12DescriptorHeap>,
+
+    shader_table: Option<ID3D12Resource>,
+
+    dispatch_ray_desc: D3D12_DISPATCH_RAYS_DESC,
 
     //Fence
     fence: Option<ID3D12Fence>,
@@ -45,7 +49,6 @@ pub struct Dx12 {
     ray_gen_symbol: Vec<u16>,
     miss_symbol: Vec<u16>,
     closest_hit_symbol: Vec<u16>,
-
     //hit group
     default_hit_group_symbol: Vec<u16>,
 
@@ -79,9 +82,11 @@ impl Dx12 {
             tlas: None,
             global_root_signature: None,
             state_object: None,
-            srv_heap: None,
-            output_buffer: None,
-            output_view_heap: None,
+            tlas_descriptor: None,
+            result_buffer: None,
+            result_resource_descriptor: None,
+            shader_table: None,
+            dispatch_ray_desc: D3D12_DISPATCH_RAYS_DESC::default(),
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
@@ -219,9 +224,7 @@ impl Dx12 {
 
         let device = self.device.as_ref().expect("You have to initialize a device");
         
-        let mut ops = D3D12_FEATURE_DATA_D3D12_OPTIONS5 {
-            ..Default::default()
-        };
+        let mut ops = D3D12_FEATURE_DATA_D3D12_OPTIONS5::default();
         unsafe {
             device.CheckFeatureSupport(
                 D3D12_FEATURE_D3D12_OPTIONS5, 
@@ -237,7 +240,7 @@ impl Dx12 {
 
         let device = self.device.as_ref().expect("You have to initialize a device");
 
-        let heap_prop = D3D12_HEAP_PROPERTIES {
+        let prop = D3D12_HEAP_PROPERTIES {
             Type: D3D12_HEAP_TYPE_UPLOAD,
             CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
             MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
@@ -245,7 +248,7 @@ impl Dx12 {
             VisibleNodeMask: 1,
         };
 
-        let resource_desc = D3D12_RESOURCE_DESC {
+        let desc = D3D12_RESOURCE_DESC {
             Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
             Alignment: 0,
             Width: std::mem::size_of_val(&vertices) as u64,
@@ -263,9 +266,9 @@ impl Dx12 {
 
         unsafe {
             device.CreateCommittedResource(
-                &heap_prop as *const _ as _, 
+                &prop as *const _ as _, 
                 D3D12_HEAP_FLAG_NONE, 
-                &resource_desc as *const _ as _, 
+                &desc as *const _ as _, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
                 &mut self.vb as *mut _ as _,
@@ -342,9 +345,7 @@ impl Dx12 {
 
         let inputs = &build_as_desc.Inputs;
 
-        let mut blas_pre_build = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO {
-            ..Default::default()
-        };
+        let mut blas_pre_build = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
 
         unsafe { 
             //必要なメモリ量を求める
@@ -559,9 +560,7 @@ impl Dx12 {
 
         let inputs = &build_as_desc.Inputs;
 
-        let mut tlas_pre_build = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO {
-            ..Default::default()
-        };
+        let mut tlas_pre_build = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO::default();
 
         unsafe {
             device.GetRaytracingAccelerationStructurePrebuildInfo(
@@ -676,11 +675,11 @@ impl Dx12 {
             NodeMask: 0,
         };
 
-        self.srv_heap = Some(unsafe {
+        self.tlas_descriptor = Some(unsafe {
             device.CreateDescriptorHeap(&heap_desc)?
         });
 
-        let heap = self.srv_heap.as_ref().unwrap();
+        let heap = self.tlas_descriptor.as_ref().unwrap();
 
         let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
             ViewDimension: D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE,
@@ -915,11 +914,11 @@ impl Dx12 {
                 &output_desc as *const _ as _,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 std::ptr::null(),
-                &mut self.output_buffer as *mut _ as _,
+                &mut self.result_buffer as *mut _ as _,
             )?;
         };
 
-        let output_buffer = self.output_buffer.as_ref().unwrap().clone();
+        let output_buffer = self.result_buffer.as_ref().unwrap().clone();
 
         let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -928,11 +927,11 @@ impl Dx12 {
             NodeMask: 0,
         };
 
-        self.output_view_heap = Some(unsafe {
+        self.result_resource_descriptor = Some(unsafe {
             device.CreateDescriptorHeap(&heap_desc)?
         });
 
-        let output_view_heap = self.output_view_heap.as_ref().unwrap();
+        let output_view_heap = self.result_resource_descriptor.as_ref().unwrap();
 
         let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
             ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
@@ -948,6 +947,142 @@ impl Dx12 {
             )
         }
 
+        Ok(())
+    }
+
+    pub fn create_shader_table(&mut self) -> Result<()> {
+        
+        let device = self.device.as_ref().expect("You have to initialize a device");
+        let state_object = self.state_object.as_ref().expect("You have to initialize a device");
+
+        //レコードはシェーダーテーブルのそれぞれの要素のこと
+        let record_size = D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES;
+        let record_size = (record_size + D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT - 1) & !(D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT - 1);
+
+        let ray_gen_size = 1 * record_size; //ray gen shaderは一つ
+        let miss_size = 1 * record_size; //miss shaderは一つ
+        let hit_group_size = 1 * record_size; //hit groupは一つ
+
+        //アライメント調整
+        let table_align = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+        let ray_gen_region = ((ray_gen_size + table_align - 1) & !(table_align - 1)) as usize;
+        let miss_region = ((miss_size + table_align - 1) & !(table_align - 1)) as usize;
+        let hit_group_region = ((hit_group_size - 1) & !(table_align - 1)) as usize;
+
+        //シェーダーテーブル生成
+        let table_size = ray_gen_region + miss_region + hit_group_region;
+        
+        let prop = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_UPLOAD,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+
+        let desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_BUFFER,
+            Alignment: 0,
+            Width: table_size as u64,
+            Height: 1,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            Format: DXGI_FORMAT_UNKNOWN,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Layout: D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+            //ここのFlagで悩んだ
+            Flags: D3D12_RESOURCE_FLAG_NONE,
+        };
+
+        unsafe {
+            device.CreateCommittedResource(
+                &prop as *const _ as _, 
+                D3D12_HEAP_FLAG_NONE, 
+                &desc as *const _ as _, 
+                D3D12_RESOURCE_STATE_GENERIC_READ, 
+                std::ptr::null(), 
+                &mut self.shader_table as *mut _ as _
+            )?;
+        }
+
+        let rtso_props: ID3D12StateObjectProperties = state_object.cast()?;
+        
+        unsafe {
+            let shader_table = self.shader_table.as_ref().unwrap();
+
+            let mut data = std::ptr::null_mut();
+            shader_table.Map(0, std::ptr::null(), &mut data)?;
+
+            //Raygenシェーダー
+            let ray_gen_shader_p = data;
+            let id = rtso_props.GetShaderIdentifier(PWSTR(self.ray_gen_symbol.as_mut_ptr()));
+
+            std::ptr::copy_nonoverlapping(
+                id, 
+                ray_gen_shader_p, 
+                D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize,
+            );
+
+            //Raygenシェーダーにローカルルートシグニチャが存在するならこのあとに書く
+            //let ray_gen_shader_p = ray_gen_shader_p.add(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize);
+
+            let miss_shader_p = data.add(ray_gen_region);
+            let id = rtso_props.GetShaderIdentifier(PWSTR(self.miss_symbol.as_mut_ptr()));
+
+            std::ptr::copy_nonoverlapping(
+                id, 
+                miss_shader_p, 
+                D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize,
+            );
+
+            //Missシェーダーにローカルルートシグニチャが存在するならこの後に書く
+            //let miss_shader_p = miss_shader_p.add((D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize);
+
+            let hit_group_p = data.add(ray_gen_region).add(miss_region);
+            let id = rtso_props.GetShaderIdentifier(PWSTR(self.default_hit_group_symbol.as_mut_ptr()));
+
+            std::ptr::copy_nonoverlapping(
+                id, 
+                hit_group_p,
+                D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize,
+            );
+
+            //HitGroupにローカルルートシグニチャが存在するならこの後に書く
+            //let hit_group_p = hit_group_p.add(D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES as usize);
+
+            shader_table.Unmap(0, std::ptr::null());
+
+            //RayGenerationShaderRecordの設定
+            let start_address = shader_table.GetGPUVirtualAddress();
+            self.dispatch_ray_desc.RayGenerationShaderRecord = D3D12_GPU_VIRTUAL_ADDRESS_RANGE {
+                StartAddress: start_address,
+                SizeInBytes: ray_gen_size as u64,
+            };
+            
+            let start_address = start_address + ray_gen_region as u64;
+            self.dispatch_ray_desc.MissShaderTable = D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE {
+                StartAddress: start_address,
+                SizeInBytes: miss_size as u64,
+                StrideInBytes: record_size as u64,
+            };
+
+            let start_address = start_address + miss_region as u64;
+            self.dispatch_ray_desc.HitGroupTable = D3D12_GPU_VIRTUAL_ADDRESS_RANGE_AND_STRIDE {
+                StartAddress: start_address,
+                SizeInBytes: hit_group_size as u64,
+                StrideInBytes: record_size as u64,
+            };
+            
+            //let start_address = start_address + hit_group_region as u64;
+
+            self.dispatch_ray_desc.Width = self.width;
+            self.dispatch_ray_desc.Height = self.height;
+            self.dispatch_ray_desc.Depth = 1;
+        };
+        
         Ok(())
     }
 
@@ -987,15 +1122,44 @@ impl Dx12 {
         })
     }
 
-    fn present(&mut self) {
-
-    }
-
     pub fn update(&mut self) {
 
     }
 
     pub fn render(&mut self) {
+        let device = self.device.as_ref().expect("You have to initialize a device");
+        let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
+        let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
+        let tlas_descriptor = self.tlas_descriptor.as_ref().expect("You have to initialize a tlas descriptor");
+        let result_resource_descriptor = self.result_resource_descriptor.as_ref().expect("You have to initialize a result resource discriptor");
+        let state_object = self.state_object.as_ref().expect("You have to initialize a state object");
+
+        unsafe {
+            //ルートシグニチャとリソースをセット
+            command_list.SetComputeRootSignature(global_root_signature);
+            command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.GetGPUDescriptorHandleForHeapStart());
+            command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.GetGPUDescriptorHandleForHeapStart());
         
+            //バリア設定
+            let barrier_to_uav = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                        //Cloneでも大丈夫か
+                        pResource: self.result_buffer.clone(),
+                        StateBefore: D3D12_RESOURCE_STATE_COPY_SOURCE,
+                        StateAfter: D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    }),
+                }
+            };
+
+            command_list.ResourceBarrier(1, &barrier_to_uav);
+
+            //レイトレ
+            command_list.SetPipelineState1(state_object);
+            command_list.DispatchRays(&self.dispatch_ray_desc);
+        }
     }
 }
