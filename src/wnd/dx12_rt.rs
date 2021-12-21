@@ -9,7 +9,9 @@ use windows::{
 };
 
 use crate::vertex::Vertex;
-pub struct Dx12 {
+
+#[repr(C)]
+pub struct Dx12Rt {
     width: u32,
     height: u32,
     frame_count: u32,
@@ -17,6 +19,8 @@ pub struct Dx12 {
     command_queue: Option<ID3D12CommandQueue>,
     dxgi_factory: Option<IDXGIFactory4>,
     swap_chain: Option<IDXGISwapChain3>,
+    render_targets: Vec<ID3D12Resource>,
+    render_target_view_descriptor: Option<ID3D12DescriptorHeap>,
     command_allocator: Option<Vec<ID3D12CommandAllocator>>,
     command_list: Option<Vec<ID3D12GraphicsCommandList4>>,
     frame_index: u32,
@@ -54,15 +58,16 @@ pub struct Dx12 {
 
     //shader
     ray_shader_blob: ID3DBlob,
+    check: bool
 }
 
-impl Dx12 {
+impl Dx12Rt {
     pub fn new(width: u32, height: u32, frame_count: u32) -> Self {
 
         //[TODO]: argsで受け取れるように
-        let ray_shader_blob = Self::load_shader("./ray_shader.cso").expect("Failed to load ray shader");
+        let ray_shader_blob = Self::load_shader("E:\\Projects\\rwr\\ray_shader.cso").expect("Failed to load ray shader");
 
-        Dx12 { 
+        Dx12Rt { 
             width, 
             height, 
             frame_count, 
@@ -70,6 +75,8 @@ impl Dx12 {
             device: None,
             dxgi_factory: None, 
             swap_chain: None, 
+            render_targets: vec![],
+            render_target_view_descriptor: None,
             command_allocator: None, 
             command_list: None,
             frame_index: 0,
@@ -95,6 +102,7 @@ impl Dx12 {
             closest_hit_symbol: "MainClosestHit\0".encode_utf16().collect(),
             default_hit_group_symbol: "DefaultHitGroup\0".encode_utf16().collect(),
             ray_shader_blob,
+            check: false,
         }
     }
 
@@ -103,7 +111,10 @@ impl Dx12 {
     pub fn create_device(&mut self) -> Result<()> {
         let mut device: Option<ID3D12Device5> = None;
         //H/WアダプタをNoneにすることでデフォルトを指定
-        unsafe { D3D12CreateDevice( None, D3D_FEATURE_LEVEL_12_0, &mut device) }?;
+        unsafe { D3D12CreateDevice( 
+            None, 
+            D3D_FEATURE_LEVEL_12_0, 
+            &mut device) }?;
 
         self.device = device;
 
@@ -139,6 +150,7 @@ impl Dx12 {
 
     pub fn create_swap_chain(&mut self, hwnd: &HWND) -> Result<()> {
 
+        let device = self.device.as_ref().expect("You have to initialize a device");
         let factory = self.dxgi_factory.as_ref().expect("You have to initialize a factory");
         let command_queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
 
@@ -147,7 +159,7 @@ impl Dx12 {
                 Width: self.width, 
                 Height: self.height, 
                 RefreshRate: DXGI_RATIONAL { Numerator: 60, Denominator: 1 }, 
-                Format: DXGI_FORMAT_B8G8R8A8_UNORM, 
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM, 
                 ScanlineOrdering: DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED, 
                 Scaling: DXGI_MODE_SCALING_UNSPECIFIED
             },
@@ -164,6 +176,45 @@ impl Dx12 {
             factory.CreateSwapChain(command_queue, &swap_chain_desc)?
         }.cast()?);
 
+        let swap_chain = self.swap_chain.as_ref().unwrap();
+
+        let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+            Type: D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+            NumDescriptors: self.frame_count,
+            Flags: D3D12_DESCRIPTOR_HEAP_FLAG_NONE,
+            NodeMask: 0,
+        };
+        
+        let rtv_heap: ID3D12DescriptorHeap = unsafe { 
+            device.CreateDescriptorHeap(
+                &heap_desc
+        )}?;
+
+        let mut handle = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
+
+        let increment_size = unsafe { device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) };
+
+        for i in 0..self.frame_count {
+            
+            let render_target: ID3D12Resource = unsafe {
+                swap_chain.GetBuffer(i)?
+            };
+            
+            let rtv_desc = D3D12_RENDER_TARGET_VIEW_DESC {
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                ViewDimension: D3D12_RTV_DIMENSION_TEXTURE2D,
+                ..Default::default()
+            };
+        
+            unsafe {
+                device.CreateRenderTargetView(&render_target, &rtv_desc as *const _, handle);
+            }
+
+            self.render_targets.push(render_target);
+            
+            handle.ptr += increment_size as usize;
+        }
+        
         Ok(())
     }
     
@@ -212,11 +263,12 @@ impl Dx12 {
     }
 
     pub fn create_fence(&mut self) -> Result<()> {
-
+        
         let device = self.device.as_ref().expect("You have to initialize a device");
 
-        self.fence = unsafe { Some(device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?) };
 
+        self.fence = unsafe { Some(device.CreateFence(0, D3D12_FENCE_FLAG_NONE)?) };
+        
         Ok(())
     }
 
@@ -1127,19 +1179,25 @@ impl Dx12 {
     }
 
     pub fn render(&mut self) {
+        if cfg!(debug_assertions) {
+            println!("render");
+        }
+
         let device = self.device.as_ref().expect("You have to initialize a device");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
         let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
         let tlas_descriptor = self.tlas_descriptor.as_ref().expect("You have to initialize a tlas descriptor");
         let result_resource_descriptor = self.result_resource_descriptor.as_ref().expect("You have to initialize a result resource discriptor");
         let state_object = self.state_object.as_ref().expect("You have to initialize a state object");
-
+        
+        
+        
         unsafe {
             //ルートシグニチャとリソースをセット
             command_list.SetComputeRootSignature(global_root_signature);
             command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.GetGPUDescriptorHandleForHeapStart());
             command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.GetGPUDescriptorHandleForHeapStart());
-        
+            
             //バリア設定
             let barrier_to_uav = D3D12_RESOURCE_BARRIER {
                 Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -1160,6 +1218,34 @@ impl Dx12 {
             //レイトレ
             command_list.SetPipelineState1(state_object);
             command_list.DispatchRays(&self.dispatch_ray_desc);
+
+            let barriers = [
+                D3D12_RESOURCE_BARRIER {
+                    Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                    Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                        Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                            //Cloneでも大丈夫か
+                            pResource: self.result_buffer.clone(),
+                            StateBefore: D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                            StateAfter: D3D12_RESOURCE_STATE_COPY_SOURCE,
+                            Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        }),
+                    }
+                }, D3D12_RESOURCE_BARRIER {
+                    Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                    Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                    Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                        Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                            //Cloneでも大丈夫か
+                            pResource: self.result_buffer.clone(),
+                            StateBefore: D3D12_RESOURCE_STATE_PRESENT,
+                            StateAfter: D3D12_RESOURCE_STATE_COPY_DEST,
+                            Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        }),
+                    }
+                },
+            ];
         }
     }
 }

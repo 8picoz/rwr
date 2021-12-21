@@ -1,6 +1,6 @@
-mod dx12;
+mod dx12_rt;
 
-use dx12::*;
+use dx12_rt::*;
 
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
@@ -25,8 +25,11 @@ pub fn run_with_raytracing() -> Result<()> {
     wnd.check_raytracing_support().unwrap_or_else(|e| panic!("{}", e));
     wnd.init_dxr().unwrap_or_else(|e| panic!("{}", e));
 
-    println!("initialized");
+    if cfg!(debug_assertions) {
+        println!("initialized");
+    }
 
+    wnd.dx.render();
     message_main_loop();
 
     Ok(())
@@ -52,7 +55,7 @@ fn message_main_loop() {
 
 struct Wnd {
     hwnd: HWND,
-    dx: Dx12,
+    dx: Dx12Rt,
 }
 
 impl Wnd {
@@ -69,8 +72,8 @@ impl Wnd {
 
         wnd
     }
-    
-    fn init_wnd() -> Result<(HWND, Dx12)> {
+
+    fn init_wnd() -> Result<(HWND, Dx12Rt)> {
         let instance = unsafe { GetModuleHandleA(None) };
     
         let wc = WNDCLASSEXA {
@@ -83,7 +86,7 @@ impl Wnd {
             ..Default::default()
         };
         
-        let mut dx = Dx12::new(SIZE.0, SIZE.1, 2);
+        let mut dx = Dx12Rt::new(SIZE.0, SIZE.1, 2);
     
         let atom = unsafe { RegisterClassExA(&wc) };
         debug_assert_ne!(atom, 0);
@@ -112,6 +115,8 @@ impl Wnd {
                 &mut dx as *mut _ as _,
             )
         };
+
+        
     
         unsafe { ShowWindow(hwnd, SW_SHOW) };
     
@@ -121,12 +126,12 @@ impl Wnd {
     fn init_d3d(&mut self) -> Result<()> {
     
         if cfg!(debug_assertions) {
-            
-            let mut debug: Option<ID3D12Debug5> = None;
+            let mut debug: Option<ID3D12Debug> = None;
             unsafe {
-                if let Some(debug) = D3D12GetDebugInterface(&mut debug).ok().and(debug) {
+                if D3D12GetDebugInterface(&mut debug).is_ok() {
+                    println!("enable debug");
+                    let debug = debug.as_ref().unwrap();
                     debug.EnableDebugLayer();
-                    debug.SetEnableGPUBasedValidation(true);
                 }
             }
         }
@@ -177,11 +182,11 @@ impl Wnd {
     }
     
     //Win32Api
-    fn sample_wndproc(sample: &mut Dx12, message: u32, _: WPARAM) -> bool {
+    fn sample_wndproc(sample: &mut Dx12Rt, message: u32, _: WPARAM) -> bool {
         match message {
             WM_PAINT => {
-                sample.update();
-                sample.render();
+                //sample.update();
+                //sample.render();
     
                 true
             }
@@ -201,7 +206,7 @@ impl Wnd {
             WM_CREATE => {
                 unsafe {
                     let create_struct: &CREATESTRUCTA = std::mem::transmute(lparam);
-                    SetWindowLongPtrA(window, GWLP_USERDATA, create_struct.lpCreateParams as _);
+                    SetWindowLong(window, GWLP_USERDATA, create_struct.lpCreateParams as _);
                 }
                 LRESULT::default()
             }
@@ -210,8 +215,8 @@ impl Wnd {
                 LRESULT::default()
             }
             _ => {
-                let user_data = unsafe { GetWindowLongPtrA(window, GWLP_USERDATA) };
-                let sample = std::ptr::NonNull::<Dx12>::new(user_data as _);
+                let user_data = unsafe { GetWindowLong(window, GWLP_USERDATA) };
+                let sample = std::ptr::NonNull::<Dx12Rt>::new(user_data as _);
                 let handled = sample.map_or(false, |mut s| {
                     Self::sample_wndproc(unsafe { s.as_mut() }, message, wparam)
                 });
@@ -226,3 +231,26 @@ impl Wnd {
     }
 }
 
+#[allow(non_snake_case)]
+#[cfg(target_pointer_width = "32")]
+unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+    SetWindowLongA(window, index, value as _) as _
+}
+
+#[allow(non_snake_case)]
+#[cfg(target_pointer_width = "64")]
+unsafe fn SetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX, value: isize) -> isize {
+    SetWindowLongPtrA(window, index, value)
+}
+
+#[allow(non_snake_case)]
+#[cfg(target_pointer_width = "32")]
+unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
+    GetWindowLongA(window, index) as _
+}
+
+#[allow(non_snake_case)]
+#[cfg(target_pointer_width = "64")]
+unsafe fn GetWindowLong(window: HWND, index: WINDOW_LONG_PTR_INDEX) -> isize {
+    GetWindowLongPtrA(window, index)
+}
