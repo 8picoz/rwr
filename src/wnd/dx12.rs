@@ -31,7 +31,10 @@ pub struct Dx12 {
     global_root_signature: Option<ID3D12RootSignature>,
     state_object: Option<ID3D12StateObject>,
 
-    heap: Option<ID3D12DescriptorHeap>,
+    srv_heap: Option<ID3D12DescriptorHeap>,
+
+    output_buffer: Option<ID3D12Resource>,
+    output_view_heap: Option<ID3D12DescriptorHeap>,
 
     //Fence
     fence: Option<ID3D12Fence>,
@@ -76,7 +79,9 @@ impl Dx12 {
             tlas: None,
             global_root_signature: None,
             state_object: None,
-            heap: None,
+            srv_heap: None,
+            output_buffer: None,
+            output_view_heap: None,
             fence: None,
             fence_value: 1,
             fence_event: unsafe { CreateEventA(std::ptr::null(), false, false, None) },
@@ -666,16 +671,16 @@ impl Dx12 {
         //D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAVの確保
         let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            NumDescriptors: 1024,
+            NumDescriptors: 1,
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             NodeMask: 0,
         };
 
-        self.heap = Some(unsafe {
+        self.srv_heap = Some(unsafe {
             device.CreateDescriptorHeap(&heap_desc)?
         });
 
-        let heap = self.heap.as_ref().unwrap();
+        let heap = self.srv_heap.as_ref().unwrap();
 
         let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
             ViewDimension: D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE,
@@ -871,6 +876,77 @@ impl Dx12 {
                 &state_obj_desc
             )?
         });
+
+        Ok(())
+    }
+
+    pub fn create_result_resource(&mut self) -> Result<()> {
+        
+        let device = self.device.as_ref().expect("You have to initialize a device");
+
+        let output_desc = D3D12_RESOURCE_DESC {
+            Dimension: D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+            Alignment: 0,
+            Width: self.width as u64,
+            Height: self.height,
+            DepthOrArraySize: 1,
+            MipLevels: 1,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 1,
+            },
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            Flags: D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
+            Layout: D3D12_TEXTURE_LAYOUT_UNKNOWN,
+        };
+
+        let prop = D3D12_HEAP_PROPERTIES {
+            Type: D3D12_HEAP_TYPE_DEFAULT,
+            CPUPageProperty: D3D12_CPU_PAGE_PROPERTY_UNKNOWN,
+            MemoryPoolPreference: D3D12_MEMORY_POOL_UNKNOWN,
+            CreationNodeMask: 1,
+            VisibleNodeMask: 1,
+        };
+
+        unsafe {
+            device.CreateCommittedResource(
+                &prop as *const _ as _,
+                D3D12_HEAP_FLAG_NONE,
+                &output_desc as *const _ as _,
+                D3D12_RESOURCE_STATE_COPY_SOURCE,
+                std::ptr::null(),
+                &mut self.output_buffer as *mut _ as _,
+            )?;
+        };
+
+        let output_buffer = self.output_buffer.as_ref().unwrap().clone();
+
+        let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+            Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            NumDescriptors: 1,
+            Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+            NodeMask: 0,
+        };
+
+        self.output_view_heap = Some(unsafe {
+            device.CreateDescriptorHeap(&heap_desc)?
+        });
+
+        let output_view_heap = self.output_view_heap.as_ref().unwrap();
+
+        let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+            ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
+            ..Default::default()
+        };
+
+        unsafe {
+            device.CreateUnorderedAccessView(
+                output_buffer, 
+                None, 
+                &uav_desc as *const _ as _, 
+                output_view_heap.GetCPUDescriptorHandleForHeapStart()
+            )
+        }
 
         Ok(())
     }
