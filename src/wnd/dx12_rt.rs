@@ -891,17 +891,14 @@ impl Dx12Rt {
         let mut sub_objs = vec![
 
             D3D12_STATE_SUBOBJECT {
-                //コレは合ってる
                 Type: D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE,
                 pDesc: &mut global_root_signature as *mut _ as _,
             },
             D3D12_STATE_SUBOBJECT {
-                //これは合ってる
                 Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG,
                 pDesc: &mut shader_config as *mut _ as _,
             },
             D3D12_STATE_SUBOBJECT {
-                //コレは合ってる
                 Type: D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG,
                 pDesc: &mut pipeline_config as *mut _ as _,
             },
@@ -1183,19 +1180,24 @@ impl Dx12Rt {
             println!("render");
         }
 
-        let device = self.device.as_ref().expect("You have to initialize a device");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
+        let command_queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
         let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
-        let tlas_descriptor = self.tlas_descriptor.as_ref().expect("You have to initialize a tlas descriptor");
+        let tlas = self.tlas.as_ref().expect("You have to initialize a tlas");
         let result_resource_descriptor = self.result_resource_descriptor.as_ref().expect("You have to initialize a result resource discriptor");
         let state_object = self.state_object.as_ref().expect("You have to initialize a state object");
-        
-        
-        
+        let result_buffer = self.result_buffer.as_ref().expect("You have to initialize a result buffer");
+        let render_target = &self.render_targets[self.frame_index as usize];
+                
         unsafe {
+            let descriptor_heaps = [
+                self.result_resource_descriptor.clone()
+            ];
+
             //ルートシグニチャとリソースをセット
             command_list.SetComputeRootSignature(global_root_signature);
-            command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.GetGPUDescriptorHandleForHeapStart());
+            command_list.SetDescriptorHeaps(descriptor_heaps.len() as u32, &descriptor_heaps as *const _);
+            command_list.SetComputeRootShaderResourceView(0, tlas.GetGPUVirtualAddress());
             command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.GetGPUDescriptorHandleForHeapStart());
             
             //バリア設定
@@ -1238,7 +1240,7 @@ impl Dx12Rt {
                     Anonymous: D3D12_RESOURCE_BARRIER_0 {
                         Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
                             //Cloneでも大丈夫か
-                            pResource: self.result_buffer.clone(),
+                            pResource: Some(render_target.clone()),
                             StateBefore: D3D12_RESOURCE_STATE_PRESENT,
                             StateAfter: D3D12_RESOURCE_STATE_COPY_DEST,
                             Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -1246,6 +1248,48 @@ impl Dx12Rt {
                     }
                 },
             ];
+            command_list.ResourceBarrier(barriers.len() as u32, &barriers as *const _);
+            command_list.CopyResource(render_target, result_buffer);
+
+            let barrier_to_present = D3D12_RESOURCE_BARRIER {
+                Type: D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
+                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                    Transition: std::mem::ManuallyDrop::new(D3D12_RESOURCE_TRANSITION_BARRIER {
+                        //Cloneでも大丈夫か
+                        pResource: Some(render_target.clone()),
+                        StateBefore: D3D12_RESOURCE_STATE_COPY_DEST,
+                        StateAfter: D3D12_RESOURCE_STATE_PRESENT,
+                        Subresource: D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    }),
+                }
+            };
+            command_list.ResourceBarrier(1, &barrier_to_present);
+            command_list.Close().unwrap();
+
+            let command_list: ID3D12CommandList = command_list.cast().unwrap();
+            let command_list = Some(command_list);
+
+            command_queue.ExecuteCommandLists(1, &command_list as *const _);
+
+            self.present(1);
         }
+    }
+
+    fn present(&mut self, interval: u32) {
+
+        let swap_chain = self.swap_chain.as_ref().unwrap();
+        let command_queue = self.command_queue.as_ref().unwrap();
+        let fence = self.fence.as_ref().unwrap();
+        unsafe { 
+            swap_chain.Present(interval, 0).unwrap();
+
+            command_queue.Signal(fence, self.fence_value).unwrap();
+
+            self.fence_value = Self::wait_for_gpu(command_queue, fence, self.fence_value, &self.fence_event).unwrap();
+
+            self.frame_index = swap_chain.GetCurrentBackBufferIndex();
+        }
+
     }
 }
