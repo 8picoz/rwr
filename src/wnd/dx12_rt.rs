@@ -1016,7 +1016,7 @@ impl Dx12Rt {
         let table_align = D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
         let ray_gen_region = ((ray_gen_size + table_align - 1) & !(table_align - 1)) as usize;
         let miss_region = ((miss_size + table_align - 1) & !(table_align - 1)) as usize;
-        let hit_group_region = ((hit_group_size - 1) & !(table_align - 1)) as usize;
+        let hit_group_region = ((hit_group_size + table_align - 1) & !(table_align - 1)) as usize;
 
         //シェーダーテーブル生成
         let table_size = ray_gen_region + miss_region + hit_group_region;
@@ -1180,6 +1180,7 @@ impl Dx12Rt {
             println!("render");
         }
 
+        let device = self.device.as_ref().expect("You have to initialize a device");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
         let command_queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
         let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
@@ -1188,10 +1189,18 @@ impl Dx12Rt {
         let state_object = self.state_object.as_ref().expect("You have to initialize a state object");
         let result_buffer = self.result_buffer.as_ref().expect("You have to initialize a result buffer");
         let render_target = &self.render_targets[self.frame_index as usize];
-                
+        
         unsafe {
-            let descriptor_heaps = [
-                self.result_resource_descriptor.clone()
+
+            let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
+                Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                NumDescriptors: 1,
+                Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
+                NodeMask: 0,
+            };
+            
+            let descriptor_heaps: [Option<ID3D12DescriptorHeap>; 1] = [
+                Some(device.CreateDescriptorHeap(&heap_desc as *const _ as _).unwrap()),
             ];
 
             //ルートシグニチャとリソースをセット
