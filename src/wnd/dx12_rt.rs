@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::ffi::c_void;
+use super::descriptor::{ Descriptor, DescriptorHeapManager };
 
 use windows::{
     core::*, Win32::Foundation::*, Win32::Graphics::Direct3D::Fxc::*, Win32::Graphics::Direct3D::*,
@@ -35,10 +35,12 @@ pub struct Dx12Rt {
     global_root_signature: Option<ID3D12RootSignature>,
     state_object: Option<ID3D12StateObject>,
 
-    tlas_descriptor: Option<ID3D12DescriptorHeap>,
+    cbv_srv_uav_descriptor_heap: Option<DescriptorHeapManager>,
+
+    tlas_descriptor: Option<Descriptor>,
 
     result_buffer: Option<ID3D12Resource>,
-    result_resource_descriptor: Option<ID3D12DescriptorHeap>,
+    result_resource_descriptor: Option<Descriptor>,
 
     shader_table: Option<ID3D12Resource>,
 
@@ -89,6 +91,7 @@ impl Dx12Rt {
             tlas: None,
             global_root_signature: None,
             state_object: None,
+            cbv_srv_uav_descriptor_heap: None,
             tlas_descriptor: None,
             result_buffer: None,
             result_resource_descriptor: None,
@@ -189,6 +192,10 @@ impl Dx12Rt {
             device.CreateDescriptorHeap(
                 &heap_desc
         )}?;
+
+        unsafe {
+            rtv_heap.SetName("RTV_HEAP").expect("Failed to set name");
+        }
 
         let mut handle = unsafe { rtv_heap.GetCPUDescriptorHandleForHeapStart() };
 
@@ -515,6 +522,7 @@ impl Dx12Rt {
         self.fence_value = Self::wait_for_gpu(queue, fence, self.fence_value, &self.fence_event)?;
         
         //command_listがレコード状態でResetをかけるとエラーとなるので使った後に必ずResetをかけることで二重Resetを防ぐ
+        unsafe { command_allocator.Reset()?; }
         unsafe { command_list.Reset(command_allocator, None)? };
 
         Ok(())
@@ -722,16 +730,26 @@ impl Dx12Rt {
         //D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAVの確保
         let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
             Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            NumDescriptors: 1,
+            NumDescriptors: 1024,
             Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
             NodeMask: 0,
         };
 
-        self.tlas_descriptor = Some(unsafe {
-            device.CreateDescriptorHeap(&heap_desc)?
+        //cbv_srv_uav_descriptor_heapの初期設定
+
+        self.cbv_srv_uav_descriptor_heap = Some(unsafe {
+            let desc_heap: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&heap_desc)?;
+            
+            desc_heap.SetName("cbv_srv_uav_descriptor_heap").expect("Failed to set name");
+
+            DescriptorHeapManager::new(desc_heap, heap_desc, device.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV))
         });
 
-        let heap = self.tlas_descriptor.as_ref().unwrap();
+        let heap_desc = self.cbv_srv_uav_descriptor_heap.as_ref().unwrap();
+
+        self.tlas_descriptor = Some(heap_desc.allocate().unwrap());
+
+        let tlas_desc = self.tlas_descriptor.as_ref().unwrap();
 
         let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
             ViewDimension: D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE,
@@ -744,11 +762,12 @@ impl Dx12Rt {
             ..Default::default()
         };
 
+        
         unsafe {
             device.CreateShaderResourceView(
                 None, 
                 &srv_desc as *const _ as _, 
-                heap.GetCPUDescriptorHandleForHeapStart(),
+                tlas_desc.h_cpu,
             );
         }
 
@@ -789,6 +808,7 @@ impl Dx12Rt {
                 ..Default::default()
             }, 
             D3D12_ROOT_PARAMETER {
+                ParameterType: D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE,
                 Anonymous: D3D12_ROOT_PARAMETER_0 {
                     DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                         NumDescriptorRanges: 1,
@@ -977,7 +997,11 @@ impl Dx12Rt {
         };
 
         self.result_resource_descriptor = Some(unsafe {
-            device.CreateDescriptorHeap(&heap_desc)?
+            let result_resource_descriptor: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&heap_desc)?;
+
+            result_resource_descriptor.SetName("result_resource_descriptor").expect("Failed to set name");
+
+            result_resource_descriptor
         });
 
         let output_view_heap = self.result_resource_descriptor.as_ref().unwrap();
@@ -1184,11 +1208,13 @@ impl Dx12Rt {
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
         let command_queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
         let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
-        let tlas = self.tlas.as_ref().expect("You have to initialize a tlas");
+        let tlas_descriptor = self.tlas_descriptor.as_ref().expect("You have to initialize a tlas descriptor");
         let result_resource_descriptor = self.result_resource_descriptor.as_ref().expect("You have to initialize a result resource discriptor");
         let state_object = self.state_object.as_ref().expect("You have to initialize a state object");
         let result_buffer = self.result_buffer.as_ref().expect("You have to initialize a result buffer");
         let render_target = &self.render_targets[self.frame_index as usize];
+        
+
         
         unsafe {
 
@@ -1200,13 +1226,13 @@ impl Dx12Rt {
             };
             
             let descriptor_heaps: [Option<ID3D12DescriptorHeap>; 1] = [
-                Some(device.CreateDescriptorHeap(&heap_desc as *const _ as _).unwrap()),
+                self.result_resource_descriptor.clone(),
             ];
 
             //ルートシグニチャとリソースをセット
             command_list.SetComputeRootSignature(global_root_signature);
             command_list.SetDescriptorHeaps(descriptor_heaps.len() as u32, &descriptor_heaps as *const _);
-            command_list.SetComputeRootShaderResourceView(0, tlas.GetGPUVirtualAddress());
+            command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.GetGPUDescriptorHandleForHeapStart());
             command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.GetGPUDescriptorHandleForHeapStart());
             
             //バリア設定
@@ -1229,6 +1255,7 @@ impl Dx12Rt {
             //レイトレ
             command_list.SetPipelineState1(state_object);
             command_list.DispatchRays(&self.dispatch_ray_desc);
+
 
             let barriers = [
                 D3D12_RESOURCE_BARRIER {
@@ -1281,7 +1308,9 @@ impl Dx12Rt {
 
             command_queue.ExecuteCommandLists(1, &command_list as *const _);
 
+
             self.present(1);
+            println!("da");
         }
     }
 
@@ -1290,6 +1319,7 @@ impl Dx12Rt {
         let swap_chain = self.swap_chain.as_ref().unwrap();
         let command_queue = self.command_queue.as_ref().unwrap();
         let fence = self.fence.as_ref().unwrap();
+
         unsafe { 
             swap_chain.Present(interval, 0).unwrap();
 
@@ -1298,7 +1328,7 @@ impl Dx12Rt {
             self.fence_value = Self::wait_for_gpu(command_queue, fence, self.fence_value, &self.fence_event).unwrap();
 
             self.frame_index = swap_chain.GetCurrentBackBufferIndex();
-        }
 
+        }
     }
 }

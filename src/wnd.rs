@@ -1,4 +1,5 @@
 mod dx12_rt;
+pub(crate) mod descriptor;
 
 use dx12_rt::*;
 
@@ -29,6 +30,7 @@ pub fn run_with_raytracing() -> Result<()> {
         println!("initialized");
     }
 
+    wnd.dx.render();
     wnd.dx.render();
     message_main_loop();
 
