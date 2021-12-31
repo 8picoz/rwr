@@ -18,8 +18,9 @@ impl Descriptor {
     } 
 }
 
+#[derive(Clone)]
 pub struct DescriptorHeapManager {
-    heap: ID3D12DescriptorHeap,
+    pub heap: ID3D12DescriptorHeap,
     heap_desc: D3D12_DESCRIPTOR_HEAP_DESC,
     inc_size: u32,
     allocate_index: u32,

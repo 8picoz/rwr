@@ -747,9 +747,7 @@ impl Dx12Rt {
 
         let heap_desc = self.cbv_srv_uav_descriptor_heap.as_ref().unwrap();
 
-        self.tlas_descriptor = Some(heap_desc.allocate().unwrap());
-
-        let tlas_desc = self.tlas_descriptor.as_ref().unwrap();
+        let tlas_descriptor = heap_desc.allocate().unwrap();
 
         let srv_desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
             ViewDimension: D3D12_SRV_DIMENSION_RAYTRACING_ACCELERATION_STRUCTURE,
@@ -767,9 +765,11 @@ impl Dx12Rt {
             device.CreateShaderResourceView(
                 None, 
                 &srv_desc as *const _ as _, 
-                tlas_desc.h_cpu,
+                tlas_descriptor.h_cpu,
             );
         }
+
+        self.tlas_descriptor = Some(tlas_descriptor);
 
         unsafe { command_list.Reset(command_allocator, None)? };
 
@@ -989,36 +989,25 @@ impl Dx12Rt {
 
         let output_buffer = self.result_buffer.as_ref().unwrap().clone();
 
-        let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
-            Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-            NumDescriptors: 1,
-            Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-            NodeMask: 0,
-        };
-
-        self.result_resource_descriptor = Some(unsafe {
-            let result_resource_descriptor: ID3D12DescriptorHeap = device.CreateDescriptorHeap(&heap_desc)?;
-
-            result_resource_descriptor.SetName("result_resource_descriptor").expect("Failed to set name");
-
-            result_resource_descriptor
-        });
-
-        let output_view_heap = self.result_resource_descriptor.as_ref().unwrap();
-
         let uav_desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
             ViewDimension: D3D12_UAV_DIMENSION_TEXTURE2D,
             ..Default::default()
         };
+
+        let heap_desc = self.cbv_srv_uav_descriptor_heap.as_ref().unwrap();
+
+        let result_resource_descriptor = heap_desc.allocate().unwrap();
 
         unsafe {
             device.CreateUnorderedAccessView(
                 output_buffer, 
                 None, 
                 &uav_desc as *const _ as _, 
-                output_view_heap.GetCPUDescriptorHandleForHeapStart()
+                result_resource_descriptor.h_cpu
             )
         }
+
+        self.result_resource_descriptor = Some(result_resource_descriptor);
 
         Ok(())
     }
@@ -1214,8 +1203,6 @@ impl Dx12Rt {
         let result_buffer = self.result_buffer.as_ref().expect("You have to initialize a result buffer");
         let render_target = &self.render_targets[self.frame_index as usize];
         
-
-        
         unsafe {
 
             let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
@@ -1226,14 +1213,14 @@ impl Dx12Rt {
             };
             
             let descriptor_heaps: [Option<ID3D12DescriptorHeap>; 1] = [
-                self.result_resource_descriptor.clone(),
+                Some(self.cbv_srv_uav_descriptor_heap.clone().unwrap().heap),
             ];
 
             //ルートシグニチャとリソースをセット
             command_list.SetComputeRootSignature(global_root_signature);
             command_list.SetDescriptorHeaps(descriptor_heaps.len() as u32, &descriptor_heaps as *const _);
-            command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.GetGPUDescriptorHandleForHeapStart());
-            command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.GetGPUDescriptorHandleForHeapStart());
+            command_list.SetComputeRootDescriptorTable(0, tlas_descriptor.h_gpu);
+            command_list.SetComputeRootDescriptorTable(1, result_resource_descriptor.h_gpu);
             
             //バリア設定
             let barrier_to_uav = D3D12_RESOURCE_BARRIER {
@@ -1310,7 +1297,6 @@ impl Dx12Rt {
 
 
             self.present(1);
-            println!("da");
         }
     }
 

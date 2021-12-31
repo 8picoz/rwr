@@ -31,7 +31,6 @@ pub fn run_with_raytracing() -> Result<()> {
     }
 
     wnd.dx.render();
-    wnd.dx.render();
     message_main_loop();
 
     Ok(())
