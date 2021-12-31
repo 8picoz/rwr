@@ -30,14 +30,13 @@ pub fn run_with_raytracing() -> Result<()> {
         println!("initialized");
     }
 
-    wnd.dx.render();
-    message_main_loop();
+    message_main_loop(&mut wnd);
 
     Ok(())
 }
 
     
-fn message_main_loop() {
+fn message_main_loop(wnd: &mut Wnd) {
     loop {
         let mut message = MSG::default();
 
@@ -51,6 +50,7 @@ fn message_main_loop() {
                 break;
             }
         }
+        wnd.dx.render();
     }
 }
 

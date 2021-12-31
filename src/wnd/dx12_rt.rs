@@ -1195,6 +1195,7 @@ impl Dx12Rt {
 
         let device = self.device.as_ref().expect("You have to initialize a device");
         let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
+        let command_allocator = &self.command_allocator.as_ref().expect("You have to initialize a command allocator")[self.frame_index as usize];
         let command_queue = self.command_queue.as_ref().expect("You have to initialize a command queue");
         let global_root_signature = self.global_root_signature.as_ref().expect("You have ot initialize a global root signature");
         let tlas_descriptor = self.tlas_descriptor.as_ref().expect("You have to initialize a tlas descriptor");
@@ -1204,13 +1205,6 @@ impl Dx12Rt {
         let render_target = &self.render_targets[self.frame_index as usize];
         
         unsafe {
-
-            let heap_desc = D3D12_DESCRIPTOR_HEAP_DESC {
-                Type: D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
-                NumDescriptors: 1,
-                Flags: D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE,
-                NodeMask: 0,
-            };
             
             let descriptor_heaps: [Option<ID3D12DescriptorHeap>; 1] = [
                 Some(self.cbv_srv_uav_descriptor_heap.clone().unwrap().heap),
@@ -1295,14 +1289,16 @@ impl Dx12Rt {
 
             command_queue.ExecuteCommandLists(1, &command_list as *const _);
 
-
             self.present(1);
+
         }
     }
 
     fn present(&mut self, interval: u32) {
 
         let swap_chain = self.swap_chain.as_ref().unwrap();
+        let command_list = &self.command_list.as_ref().expect("You have to initialize a command list")[self.frame_index as usize];
+        let command_allocator = &self.command_allocator.as_ref().expect("You have to initialize a command allocator")[self.frame_index as usize];
         let command_queue = self.command_queue.as_ref().unwrap();
         let fence = self.fence.as_ref().unwrap();
 
@@ -1315,6 +1311,10 @@ impl Dx12Rt {
 
             self.frame_index = swap_chain.GetCurrentBackBufferIndex();
 
+
+            //command_listがレコード状態でResetをかけるとエラーとなるので使った後に必ずResetをかけることで二重Resetを防ぐ
+            command_allocator.Reset().unwrap(); 
+            command_list.Reset(command_allocator, None).unwrap();
         }
     }
 }
