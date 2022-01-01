@@ -214,7 +214,7 @@ impl Dx12Rt {
             };
         
             unsafe {
-                device.CreateRenderTargetView(&render_target, &rtv_desc as *const _, handle);
+                device.CreateRenderTargetView(&render_target, &rtv_desc, handle);
             }
 
             self.render_targets.push(render_target);
@@ -325,12 +325,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &desc as *const _ as _, 
+                &desc, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
-                &mut self.vb as *mut _ as _,
+                &mut self.vb,
             )?;
         };
 
@@ -396,7 +396,7 @@ impl Dx12Rt {
                 Flags: D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_NONE,
                 NumDescs: 1,
                 Anonymous: D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS_0 {
-                    pGeometryDescs: &mut geom_desc as *mut _ as _
+                    pGeometryDescs: &mut geom_desc
                 }
             },
             ..Default::default()
@@ -409,8 +409,8 @@ impl Dx12Rt {
         unsafe { 
             //必要なメモリ量を求める
             device.GetRaytracingAccelerationStructurePrebuildInfo(
-                inputs as *const _ as _, 
-                &mut blas_pre_build as *mut _ as _
+                inputs, 
+                &mut blas_pre_build
             ) 
         };
 
@@ -444,12 +444,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &scratch_desc as *const _ as _, 
+                &scratch_desc, 
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
                 std::ptr::null(), 
-                &mut self.blas_scratch as *mut _ as _,
+                &mut self.blas_scratch,
             )?;
         }
 
@@ -471,12 +471,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &blas_buffer_desc as *const _ as _, 
+                &blas_buffer_desc, 
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
                 std::ptr::null(), 
-                &mut self.blas as *mut _ as _,
+                &mut self.blas,
             )?;
         }
 
@@ -495,7 +495,7 @@ impl Dx12Rt {
 
         unsafe {
             command_list.BuildRaytracingAccelerationStructure(
-                &build_as_desc as *const _ as _, 
+                &build_as_desc, 
                 0, 
                 std::ptr::null(),
             );
@@ -585,12 +585,12 @@ impl Dx12Rt {
         let mut instance_desc_buffer: Option<ID3D12Resource> = None;
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &desc as *const _ as _, 
+                &desc, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
-                &mut instance_desc_buffer as *mut _ as _
+                &mut instance_desc_buffer,
             )?;
         }
 
@@ -599,9 +599,9 @@ impl Dx12Rt {
             
             vertex_buffer.Map(0, std::ptr::null(), &mut data)?;
             std::ptr::copy_nonoverlapping(
-                &instance_desc as *const _ as _, 
+                &instance_desc, 
                 data as *mut _ as _, 
-                1
+                1,
             );
             vertex_buffer.Unmap(0, std::ptr::null());
         };
@@ -624,8 +624,8 @@ impl Dx12Rt {
 
         unsafe {
             device.GetRaytracingAccelerationStructurePrebuildInfo(
-                inputs as *const _ as _, 
-                &mut tlas_pre_build as *mut _ as _,
+                inputs, 
+                &mut tlas_pre_build,
             );
         }
 
@@ -657,12 +657,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &scratch_desc as *const _ as _,
+                &scratch_desc,
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, 
                 std::ptr::null(), 
-                &mut self.tlas_scratch as *mut _ as _,
+                &mut self.tlas_scratch,
             )?;
         }
 
@@ -684,12 +684,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &tlas_buffer_desc as *const _ as _, 
+                &tlas_buffer_desc, 
                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, 
                 std::ptr::null(), 
-                &mut self.tlas as *mut _ as _,
+                &mut self.tlas,
             )?;
         }
 
@@ -764,7 +764,7 @@ impl Dx12Rt {
         unsafe {
             device.CreateShaderResourceView(
                 None, 
-                &srv_desc as *const _ as _, 
+                &srv_desc, 
                 tlas_descriptor.h_cpu,
             );
         }
@@ -802,7 +802,7 @@ impl Dx12Rt {
                 Anonymous: D3D12_ROOT_PARAMETER_0 {
                     DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                         NumDescriptorRanges: 1,
-                        pDescriptorRanges: &mut desc_range_tlas as *mut _ as _,
+                        pDescriptorRanges: &mut desc_range_tlas,
                     }
                 },
                 ..Default::default()
@@ -812,7 +812,7 @@ impl Dx12Rt {
                 Anonymous: D3D12_ROOT_PARAMETER_0 {
                     DescriptorTable: D3D12_ROOT_DESCRIPTOR_TABLE {
                         NumDescriptorRanges: 1,
-                        pDescriptorRanges: &mut desc_range_output as *mut _ as _,
+                        pDescriptorRanges: &mut desc_range_output,
                     }
                 },
                 ..Default::default()
@@ -978,12 +978,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _,
+                &prop,
                 D3D12_HEAP_FLAG_NONE,
-                &output_desc as *const _ as _,
+                &output_desc,
                 D3D12_RESOURCE_STATE_COPY_SOURCE,
                 std::ptr::null(),
-                &mut self.result_buffer as *mut _ as _,
+                &mut self.result_buffer,
             )?;
         };
 
@@ -1002,7 +1002,7 @@ impl Dx12Rt {
             device.CreateUnorderedAccessView(
                 output_buffer, 
                 None, 
-                &uav_desc as *const _ as _, 
+                &uav_desc, 
                 result_resource_descriptor.h_cpu
             )
         }
@@ -1061,12 +1061,12 @@ impl Dx12Rt {
 
         unsafe {
             device.CreateCommittedResource(
-                &prop as *const _ as _, 
+                &prop, 
                 D3D12_HEAP_FLAG_NONE, 
-                &desc as *const _ as _, 
+                &desc, 
                 D3D12_RESOURCE_STATE_GENERIC_READ, 
                 std::ptr::null(), 
-                &mut self.shader_table as *mut _ as _
+                &mut self.shader_table,
             )?;
         }
 
