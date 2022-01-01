@@ -161,11 +161,6 @@ impl Wnd {
     pub fn init_dxr(&mut self) -> Result<()> {
 
         let tri = [
-            /*
-            Vertex::new(-0.5, -0.5, 0.0, 0.5, 0.5, 0.5, 1.0),
-            Vertex::new(0.5, -0.5, 0.0, 0.5, 0.5, 0.5, 1.0),
-            Vertex::new(0.0, 0.75, 0.0, 0.5, 0.5, 0.5, 1.0),
-            */
             Vertex::new(-0.5, -0.5, 0.0),
             Vertex::new(0.5, -0.5, 0.0),
             Vertex::new(0.0, 0.75, 0.0),
