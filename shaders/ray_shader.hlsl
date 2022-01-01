@@ -10,7 +10,7 @@ struct MyAttribute {
 };
 
 //Ray Generation シェーダー
-//令を発射するシェーダー
+//レイを発射するシェーダー
 [shader("raygeneration")]
 void MainRayGen() {
     uint2 launchIndex = DispatchRaysIndex().xy;
@@ -34,15 +34,15 @@ void MainRayGen() {
         gRtScene,
         flags,
         rayMask,
-        0, //ray index
-        1, //MultiplierForGeometryContrib
-        0, //ShaderTableのどのMiss Shaderを使用するかを指定する
+        0,
+        1,
+        0,
         rayDesc,
         payload
     );
     float3 col = payload.color;
 
-    //結果格納
+    //????i?[
     gOutput[launchIndex.xy] = float4(col, 1);
 }
 
